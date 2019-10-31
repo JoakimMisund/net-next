@@ -217,8 +217,6 @@ struct tcp_bbr_info {
 
 struct tcp_prague_info {
 	__u32	prague_alpha;
-	__u32	prague_ab_ecn;
-	__u32	prague_ab_tot;
 	__u32	prague_max_burst;
 };
 
