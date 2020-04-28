@@ -375,8 +375,10 @@ static void prague_init(struct sock *sk)
 		cmpxchg(&sk->sk_pacing_status, SK_PACING_NONE,
 			SK_PACING_NEEDED);
 
-		if (paced_chirping_enabled)
+		if (paced_chirping_enabled) {
 			paced_chirping_init(sk, tp, &ca->pc);
+			ca->upscaled_alpha = 0;
+		}
 
 		prague_reset(tp, ca);
 		return;
