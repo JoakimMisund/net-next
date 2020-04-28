@@ -27,6 +27,7 @@
 #define EXIT_BOGUS 0
 #define EXIT_LOSS 1
 #define EXIT_TRANSITION 2
+#define EXIT_OVERSHOOT 4
 
 /* Debugging */
 #define PC_DEBUG 0
@@ -46,14 +47,16 @@ struct cc_chirp {
 	u8 mem_flag;
 
 	u16 chirp_number; /* Chirp number, first chirp has number 0 */
-	u16 N;            /* The number of packets/segments in this chirp */
-	u16 qdelay_index; /* Used to record the measured queue delays */
-	u16 ack_cnt;      /* The number of acks received. ack_cnt <= N*/
+	u8  N;            /* The number of packets/segments in this chirp */
+	u8  qdelay_index; /* Used to record the measured queue delays */
+	u8  ack_cnt;      /* The number of acks received. ack_cnt <= N*/
+	u16 geometry;     /* Geometry used when scheduled chirp */
+	
+	u32 min_q_delay;
+	u32 excursion_index;
 	
 	u32 begin_seq;    /* Sequence number of first segment in chirp */
 	u32 end_seq;      /* Sequence number of first segment after last segment in the chirp */
-	u32 fully_sent;   /* The chirp has been fully sent and the kernel has requested a new chirp.
-			   * This can probably be removed and replaced by a check for end_seq != 0. */
 	
 	u32 qdelay[CHIRP_SIZE];              /* Queue delay experienced by each of the packets*/
 	u64 scheduled_gaps[CHIRP_SIZE];      /* Inter send times recorded by the kernel.
@@ -71,6 +74,7 @@ struct paced_chirping {
 			      * time all the chirps in the current round take up */
 	u32 chirp_number;    /* The next chirp number */
 	u32 M;               /* Maximum number of chirps in current round */
+	u32 gap_avg_conservative_ns;
 	u32 round_start;     /* Chirp number of the first chirp in the round*/
 	u32 round_sent;      /* Number of chirps sent in the round */
 	u16 gain;            /* How much M is increased in-between rounds. M *= gain */
@@ -85,9 +89,9 @@ struct paced_chirping {
 
 
 /*Paced Chirping parameters*/
-static unsigned int paced_chirping_enabled __read_mostly = 0;
+static unsigned int paced_chirping_enabled __read_mostly = 1;
 module_param(paced_chirping_enabled, uint, 0644);
-MODULE_PARM_DESC(paced_chirping_enabled, "Enable paced chirping (Default: 0)");
+MODULE_PARM_DESC(paced_chirping_enabled, "Enable paced chirping (Default: 1)");
 
 static unsigned int paced_chirping_initial_gain __read_mostly = 2<<G_G_SHIFT; /* gain shifted */
 module_param(paced_chirping_initial_gain, uint, 0644);
