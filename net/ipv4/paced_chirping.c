@@ -93,7 +93,7 @@ void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 		   (u32)pc->geometry,
 		   MEMORY_CACHE_SIZE_BYTES));
 }
-EXPORT_SYMBOL(paced_chirping_exit);
+//EXPORT_SYMBOL(paced_chirping_exit);
 
 void paced_chirping_release(struct paced_chirping *pc)
 {
@@ -411,7 +411,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 
 	return 0;
 }
-EXPORT_SYMBOL(paced_chirping_new_chirp);
+//EXPORT_SYMBOL(paced_chirping_new_chirp);
 
 
 
@@ -640,7 +640,7 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 		}
 	}
 }
-EXPORT_SYMBOL(paced_chirping_update);
+//EXPORT_SYMBOL(paced_chirping_update);
 
 
 /* Must be called in init */
@@ -692,6 +692,7 @@ void paced_chirping_init(struct sock *sk, struct tcp_sock *tp,
 
 	pc->pc_state = STATE_ACTIVE;
 }
+//EXPORT_SYMBOL(paced_chirping_init);
 
 
 
