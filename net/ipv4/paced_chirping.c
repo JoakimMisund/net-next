@@ -43,6 +43,16 @@ int paced_chirping_active(struct paced_chirping *pc)
 }
 //EXPORT_SYMBOL(paced_chirping_active);
 
+static u32 gap_to_Bps_ns(struct sock *sk, struct tcp_sock *tp, u32 gap_ns)
+{
+	u64 rate;
+	if (!gap_ns) return 0;
+	rate = tcp_mss_to_mtu(sk, tp->mss_cache);
+	rate *= NSEC_PER_SEC;
+	do_div(rate, gap_ns);
+	return (u32)rate;
+}
+
 void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -116,7 +126,6 @@ static u32 calculate_inter_arrival_time(struct cc_chirp *chirp)
 	u32 index;
 	for (index = 2; index < chirp->qdelay_index; ++index) {
 		total_gap += chirp->inter_arrival_times[index];
-		count++;
 	}
 	return (u32)(total_gap / (index-1));
 }
@@ -394,10 +403,10 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	
 	list_add_tail(&(new_chirp->list), &(pc->chirp_list->list));
 	/* Make sure the cwnd is large enough. In case of app limited this needs to be handled. */
-	tp->snd_cwnd = tp->packets_out + N<<1; 
+	tp->snd_cwnd = tp->packets_out + (N<<1); 
 	
 
-	LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,INFO:sched_chirp=%d,avg=%d,guard=%d,N=%llu,length_us=%u,round_length=%u\n",
+	LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,INFO:sched_chirp=%d,avg=%d,guard=%d,N=%u,length_us=%llu,round_length=%u\n",
 		   ntohl(sk->sk_rcv_saddr),
 		   ntohl(sk->sk_daddr),
 		   sk->sk_num,
@@ -450,7 +459,7 @@ static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp)
 		if (i < (N-1) && (s[i]<<1) < s[i+1])
 			return INVALID_CHIRP;
 
-		*min_q_delay = min(*min_q_delay, q[i]);
+		chirp->min_q_delay = min(chirp->min_q_delay, q[i]);
 		E[i] = 0;
 		/*Check if currently tracking a possible excursion*/
 		q_diff = (int)q[i] - (int)q[excursion_start];
@@ -504,16 +513,6 @@ static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp)
 	if (gap_avg > U32_MAX)
 		gap_avg = INVALID_CHIRP;
 	return gap_avg;
-}
-
-static u32 gap_to_Bps_ns(struct sock *sk, struct tcp_sock *tp, u32 gap_ns)
-{
-	u64 rate;
-	if (!gap_ns) return 0;
-	rate = tcp_mss_to_mtu(sk, tp->mss_cache);
-	rate *= NSEC_PER_SEC;
-	do_div(rate, gap_ns);
-	return (u32)rate;
 }
 
 void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const struct rate_sample *rs)
