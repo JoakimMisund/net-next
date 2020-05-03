@@ -103,8 +103,10 @@ static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *p
 	/* We only increase the number of chirps if we have sent the first 6 chirps
 	 * and we managed to exhaust the previous allowed number of chirps.
 	 * The first 6 chirps have sizes 5, 5, 8, 8, 16, 16. */
-	if (pc->chirp_number >= 6)
-		pc->M = (pc->M * pc->gain)>>G_G_SHIFT;
+	if (pc->chirp_number >= 6) {
+		u64 new_M = ((u64)pc->M * (u64)pc->gain)>>G_G_SHIFT;
+		pc->M = max((u32)new_M, pc->M); /* In case of overflow */
+	}
 
 	pc->round_start = pc->chirp_number;
 	pc->round_sent = pc->round_length_us = 0;
