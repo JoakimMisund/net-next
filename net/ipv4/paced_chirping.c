@@ -114,7 +114,7 @@ static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *p
 }
 static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc)
 {
-	return tp->srtt_us && ((tp->srtt_us>>3) <= pc->round_length_us);
+	return tcp_min_rtt(tp) && (tcp_min_rtt(tp) <= pc->round_length_us);
 }
 static struct cc_chirp* get_first_chirp(struct paced_chirping *pc)
 {
@@ -521,7 +521,6 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 		if (c->chirp_number >= 2U && c->chirp_number == pc->round_start
 		    && c->qdelay_index == 0) {
 			start_new_round(tp, pc);
-			//pc->pc_state |= (MARKING_PKT_RECVD | MARKING_PKT_SENT);
 		}
 
 		if (c->qdelay_index != c->N) {
@@ -540,6 +539,9 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 
 			new_estimate = analyze_chirp(sk, c);
 			update_gap_avg(tp, pc, new_estimate, c->chirp_number);
+
+			if (check_termination(sk, tp, pc))
+				return;
 
 			LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,chirp_num=%u,estimate=%u,new_avg=%u,pkts_out=%u,nxt_chirp=%u,min_rtt=%u,ack_cnt=%u\n",
 				   ntohl(sk->sk_rcv_saddr),

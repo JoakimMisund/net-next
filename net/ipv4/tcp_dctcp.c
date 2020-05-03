@@ -91,8 +91,10 @@ static void dctcp_init(struct sock *sk)
 		ca->loss_cwnd = 0;
 		ca->ce_state = 0;
 
-		if (paced_chirping_enabled)
+		if (paced_chirping_enabled) {
 			paced_chirping_init(sk, tp, &ca->pc);
+			ca->dctcp_alpha = 0;
+		}
 
 		dctcp_reset(tp, ca);
 		return;
