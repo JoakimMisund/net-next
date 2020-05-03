@@ -40,13 +40,16 @@ static void print_u32_array(u32 *array, u32 size, char *name, struct sock *sk);
 
 int paced_chirping_active(struct paced_chirping *pc)
 {
-	return pc->pc_state;
+	return pc->pc_state & STATE_ACTIVE;
 }
 EXPORT_SYMBOL(paced_chirping_active);
 
 void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+
+	if (!paced_chirping_active(pc))
+		return;
 
 	/* When Paced Chirping decides that it should exit because it has
 	 * "filled the pipe" snd_cwnd and snd_ssthresh is set to match the
@@ -178,7 +181,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	u64 initial_gap_ns;
 	u64 chirp_length_ns;
 
-	if (!tp->is_chirping || !pc->chirp_list || !(pc->pc_state & STATE_ACTIVE)) {
+	if (!tp->is_chirping || !pc->chirp_list || !paced_chirping_active(pc)) {
 		return 1;
 	}
 
