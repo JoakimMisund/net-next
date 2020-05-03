@@ -355,6 +355,8 @@ struct tcp_sock {
 	struct hrtimer	pacing_timer;
 	struct hrtimer	compressed_ack_timer;
 
+	u32 disable_kernel_pacing_calculation;
+
 	/* from STCP, retrans queue hinting */
 	struct sk_buff* lost_skb_hint;
 	struct sk_buff *retransmit_skb_hint;
