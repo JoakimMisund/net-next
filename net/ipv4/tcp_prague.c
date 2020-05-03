@@ -37,6 +37,8 @@
 
 #include "paced_chirping.h"
 
+//#include "paced_chirping.c"
+
 #define PRAGUE_ALPHA_BITS	31
 #define PRAGUE_MAX_ALPHA	((u64)(1U << PRAGUE_ALPHA_BITS))
 
@@ -411,7 +413,7 @@ static struct tcp_congestion_ops prague __read_mostly = {
 	.flags		= TCP_CONG_NEEDS_ECN | TCP_CONG_NEEDS_ACCECN |
 		TCP_CONG_NON_RESTRICTED,
 	.owner		= THIS_MODULE,
-	.name		= "prague",
+	.name		= "prague-lo",
 };
 
 static struct tcp_congestion_ops prague_reno __read_mostly = {
@@ -420,7 +422,7 @@ static struct tcp_congestion_ops prague_reno __read_mostly = {
 	.undo_cwnd	= tcp_reno_undo_cwnd,
 	.get_info	= prague_get_info,
 	.owner		= THIS_MODULE,
-	.name		= "prague-reno",
+	.name		= "prague-reno-lo",
 };
 
 static int __init prague_register(void)

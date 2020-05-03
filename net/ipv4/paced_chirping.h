@@ -29,8 +29,8 @@
 #define EXIT_TRANSITION 2
 
 /* Debugging */
-#define PC_DEBUG 0
-#define PC_LOG 1
+#define PC_DEBUG 1
+#define PC_LOG 0
 #define LOG_PRINT(x) do { if (PC_LOG) printk x; if (PC_DEBUG) trace_printk x;} while (0)
 
 /* Memory cache */
