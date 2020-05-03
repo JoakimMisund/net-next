@@ -202,6 +202,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 			   sk->sk_num,
 			   ntohs(sk->sk_dport)));
 		pc->pc_state |= MARKING_PKT_SENT;
+		tp->snd_cwnd++;
 		return 0;
 	}
 
@@ -219,12 +220,14 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	 * was sending data at a rate fast enough to not make the sending of the chirp stall.
 	 * I (Joakim) am not sure if this is needed. */
 	if (!enough_data_for_chirp(sk, tp, N))  {
+		tp->snd_cwnd++;
 		return 0;
 	}
 
 	if (!(new_chirp = cached_chirp_malloc(pc))) {
 		trace_printk("port=%hu,ERROR_MALLOC\n",
 			     tp->inet_conn.icsk_bind_hash->port);
+		tp->snd_cwnd++;
 		return 0;
 	}
         /* A chirp consists of N packets sent with decreasing inter-packet time (increasing rate).
@@ -344,7 +347,7 @@ static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp)
 
 	if (N < 2)
 		return INVALID_CHIRP;
-	if (chirp->ack_cnt < N>>1) /* Ack aggregation is too great. This might be too strict. */
+	if (chirp->ack_cnt < (N>>1)) /* Ack aggregation is too great. This might be too strict. */
 		return INVALID_CHIRP;
 	for (i = 1; i < N; ++i) {
 
