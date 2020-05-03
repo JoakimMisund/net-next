@@ -757,3 +757,8 @@ config TCP_MD5SIG
 	  on the Internet.
 
 	  If unsure, say N.
+
+config PACED_CHIRPING
+       bool
+       select SKB_EXTENSIONS
+       default y

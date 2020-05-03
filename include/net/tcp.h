@@ -1190,6 +1190,8 @@ struct tcp_congestion_ops {
 	 */
 	u32 (*new_chirp)(struct sock *sk);
 
+	void (*pkt_acked)(struct sock *sk, struct sk_buff *skb);
+
 	/* get info for inet_diag (optional) */
 	size_t (*get_info)(struct sock *sk, u32 ext, int *attr,
 			   union tcp_cc_info *info);

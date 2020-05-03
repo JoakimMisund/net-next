@@ -42,6 +42,7 @@
 #include <linux/inet_diag.h>
 #include "tcp_dctcp.h"
 #include "paced_chirping.h"
+#include <net/paced_chirping.h>
 
 #define DCTCP_MAX_ALPHA	1024U
 
@@ -261,6 +262,14 @@ static u32 dctcp_new_chirp (struct sock *sk)
 	return paced_chirping_new_chirp(sk, &ca->pc);
 }
 
+void dctcp_ack_acked(struct sock *sk, struct sk_buff *skb)
+{
+	struct dctcp *ca = inet_csk_ca(sk);
+	if (paced_chirping_enabled && paced_chirping_active(&ca->pc)) {
+		paced_chirping_pkt_acked(sk, &ca->pc, skb);
+	}
+}
+
 static struct tcp_congestion_ops dctcp __read_mostly = {
 	.init		= dctcp_init,
 	.release	= dctcp_release,
@@ -277,8 +286,9 @@ static struct tcp_congestion_ops dctcp __read_mostly = {
 	.cong_avoid     = dctcp_cong_avoid,
 	.pkts_acked     = dctcp_acked,
 	.new_chirp      = dctcp_new_chirp,
-
-	.name		= "dctcp",
+	.pkt_acked      = dctcp_ack_acked,
+	
+	.name		= "dctcp-lo",
 };
 
 static struct tcp_congestion_ops dctcp_reno __read_mostly = {
@@ -287,7 +297,7 @@ static struct tcp_congestion_ops dctcp_reno __read_mostly = {
 	.undo_cwnd	= tcp_reno_undo_cwnd,
 	.get_info	= dctcp_get_info,
 	.owner		= THIS_MODULE,
-	.name		= "dctcp-reno",
+	.name		= "dctcp-reno-lo",
 };
 
 static int __init dctcp_register(void)

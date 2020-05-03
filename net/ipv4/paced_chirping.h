@@ -50,8 +50,8 @@ struct cc_chirp {
 	u16 qdelay_index; /* Used to record the measured queue delays */
 	u16 ack_cnt;      /* The number of acks received. ack_cnt <= N*/
 
-	u32 begin_seq;    /* Sequence number of first segment in chirp */
-	u32 end_seq;      /* Sequence number of first segment after last segment in the chirp */
+	//u32 begin_seq;    /* Sequence number of first segment in chirp */
+	//u32 end_seq;      /* Sequence number of first segment after last segment in the chirp */
 	u32 fully_sent;   /* The chirp has been fully sent and the kernel has requested a new chirp.
 			   * This can probably be removed and replaced by a check for end_seq != 0. */
 
@@ -92,12 +92,7 @@ struct paced_chirping {
 	u32 round_sent;      /* Number of chirps sent in the round */
 	u16 gain;            /* How much M is increased in-between rounds. M *= gain */
 	u16 geometry;        /* Controls the range of the gaps within each chirp  */
-
-	/* Memory caching
-	 * Experimenting with allocating memory for the cc_chirp structures at the start of the flow to
-	 * reduce overhead. */
-	u16 cache_index;
-	struct cc_chirp *memory_cache;
+	struct cc_chirp *cur_chirp;
 };
 
 
@@ -140,6 +135,7 @@ MODULE_PARM_DESC(paced_chirping_L, "Number of packets that make up an excursion"
 void paced_chirping_init(struct sock *sk, struct tcp_sock *tp, struct paced_chirping *pc);
 u32  paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc);
 void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const struct rate_sample *rs);
+void paced_chirping_pkt_acked(struct sock *sk, struct paced_chirping *pc, struct sk_buff *skb);
 int  paced_chirping_active(struct paced_chirping *pc);
 void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason);
 void paced_chirping_release(struct paced_chirping* pc);
