@@ -27,7 +27,6 @@ static struct cc_chirp* get_first_chirp(struct paced_chirping *pc);
 static struct cc_chirp* get_last_chirp(struct paced_chirping *pc);
 
 static u32 gap_to_Bps_ns(struct sock *sk, struct tcp_sock *tp, u32 gap_ns);
-static uint32_t switch_divide(uint32_t value, uint32_t by, u8 round_up);
 
 /* Experimental functionality */
 static bool enough_data_for_chirp(struct sock *sk, struct tcp_sock *tp, int N);
@@ -174,10 +173,10 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	struct cc_chirp *last_chirp;
 	struct cc_chirp *cur_chirp;
 	u32 N = CHIRP_SIZE;
-	u32 guard_interval_ns;
-	u32 gap_step_ns;
-	u32 initial_gap_ns;
-	u32 chirp_length_ns;
+	u64 guard_interval_ns;
+	u64 gap_step_ns;
+	u64 initial_gap_ns;
+	u64 chirp_length_ns;
 
 	if (!tp->is_chirping || !pc->chirp_list || !(pc->pc_state & STATE_ACTIVE)) {
 		return 1;
@@ -265,11 +264,25 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	 *            = (N-1) * a - (1 + 2 + ... + (N-2)) * s
 	 *            = (N-1) * a - s * (N-2)*(N-1)/2
 	 */
-	gap_step_ns = switch_divide((((pc->geometry - (1<<G_G_SHIFT))<<1))*pc->gap_avg_ns , N, 1U) >> G_G_SHIFT;
-	initial_gap_ns = (pc->gap_avg_ns * pc->geometry)>>G_G_SHIFT;
+	/* Calculate the gap between the first two packets */
+	initial_gap_ns = ((u64)pc->gap_avg_ns * (u64)pc->geometry)>>G_G_SHIFT;
+
+	/* Calculate the linear decrease in inter-packet gap */
+	gap_step_ns = (u64)pc->gap_avg_ns * ((pc->geometry - (1<<G_G_SHIFT))<<1);
+	gap_step_ns += N - 1; /* Round up */
+	do_div(gap_step_ns, N);
+	gap_step_ns >>= G_G_SHIFT;
+
+	/* Calculate the total length of the chirp. Can be used with M to calculate the guard interval*/
 	chirp_length_ns = (N-1) * initial_gap_ns - gap_step_ns * (((N-2)*(N-1))>>1);
-	guard_interval_ns = switch_divide((tp->srtt_us>>3), (pc->M>>M_SHIFT), 0) << 10;
-	guard_interval_ns = (guard_interval_ns > chirp_length_ns) ? max(pc->gap_avg_ns, guard_interval_ns - chirp_length_ns): pc->gap_avg_ns;
+
+	/* Calculate the guard interval */
+	/* The way to do it if M is used. */
+	guard_interval_ns = (tp->srtt_us>>3) << 10;   /* Whole RTT in approx ns */
+	do_div(guard_interval_ns, pc->M>>M_SHIFT);   /* Divided up in M pieces */
+	guard_interval_ns = (guard_interval_ns > chirp_length_ns) ?
+		max((u64)pc->gap_avg_ns, (u64)guard_interval_ns - (u64)chirp_length_ns) :
+		pc->gap_avg_ns);
 
 	/* Provide the kernel with the pacing information */
 	tp->chirp.packets = new_chirp->N = N;
@@ -617,37 +630,6 @@ static u32 gap_to_Bps_ns(struct sock *sk, struct tcp_sock *tp, u32 gap_ns)
 	rate = rate/(u64)gap_ns;
 	return (u32)rate;
 }
-
-
-
-
-
-static uint32_t switch_divide(uint32_t value, uint32_t by, u8 round_up)
-{
-	switch(by) {
-	case 1:
-		return value;
-	case 2:
-		return value >> 1;
-	case 4:
-		return value >> 2;
-	case 8:
-		return value >> 3;
-	case 16:
-		return value >> 4;
-	case 32:
-		return value >> 5;
-	case 0:
-		trace_printk("Divide by zero!\n");
-		return value;
-	}
-	if (round_up) {
-		return DIV_ROUND_UP(value, by);
-	} else {
-		return value/by;
-	}
-}
-
 
 static struct cc_chirp* cached_chirp_malloc(struct paced_chirping *pc)
 {
