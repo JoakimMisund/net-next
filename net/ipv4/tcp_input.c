@@ -362,7 +362,7 @@ bool tcp_accecn_syn_feedback(struct tcp_sock *tp, int ace, int sent_ect,
 		goto accept;
 	ect = tcp_accecn_echoed_ect(ace);
 	if (ect != sent_ect && ect != INET_ECN_CE) {
-		pr_warn("got=%d expected=%\n", ect, sent_ect);
+		pr_warn("got=%d expected=%d\n", ect, sent_ect);
 		goto reject;
 	}
 
@@ -3280,6 +3280,10 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 
 		if (!fully_acked)
 			break;
+
+		if (icsk->icsk_ca_ops->pkt_acked) {
+			icsk->icsk_ca_ops->pkt_acked(sk, skb);
+		}
 
 		next = skb_rb_next(skb);
 		if (unlikely(skb == tp->retransmit_skb_hint))
