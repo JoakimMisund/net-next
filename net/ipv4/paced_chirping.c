@@ -18,7 +18,8 @@
 /* Algorithm functions */
 static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *pc);
 static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc);
-static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc, u32 new_estimate_ns);
+static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc,
+			   u32 new_estimate_ns, u32 chirp_number);
 static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp);
 
 
@@ -128,7 +129,8 @@ static struct cc_chirp* get_last_chirp(struct paced_chirping *pc)
 	return list_last_entry(&(pc->chirp_list->list), struct cc_chirp, list);
 }
 
-static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc, u32 new_estimate_ns)
+static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc,
+			   u32 new_estimate_ns, u32 chirp_number)
 {
 	u32 prev_estimate_ns = pc->gap_avg_ns;
 
@@ -277,7 +279,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	do_div(guard_interval_ns, pc->M>>M_SHIFT);   /* Divided up in M pieces */
 	guard_interval_ns = (guard_interval_ns > chirp_length_ns) ?
 		max((u64)pc->gap_avg_ns, (u64)guard_interval_ns - (u64)chirp_length_ns) :
-		pc->gap_avg_ns);
+		pc->gap_avg_ns;
 
 	/* Provide the kernel with the pacing information */
 	tp->chirp.packets = new_chirp->N = N;
@@ -302,7 +304,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	tp->snd_cwnd += N;
 
 
-	LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,INFO:sched_chirp=%d,avg=%d,guard=%d,N=%u,length_us=%u,round_length=%u\n",
+LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,INFO:sched_chirp=%d,avg=%d,guard=%d,N=%u,length_us=%llu,round_length=%u\n",
 		   ntohl(sk->sk_rcv_saddr),
 		   ntohl(sk->sk_daddr),
 		   sk->sk_num,
@@ -537,7 +539,7 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 		     && !after(c->end_seq, tp->snd_una))) {
 
 			new_estimate = analyze_chirp(sk, c);
-			update_gap_avg(tp, pc, new_estimate);
+			update_gap_avg(tp, pc, new_estimate, c->chirp_number);
 
 			LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,chirp_num=%u,estimate=%u,new_avg=%u,pkts_out=%u,nxt_chirp=%u,min_rtt=%u,ack_cnt=%u\n",
 				   ntohl(sk->sk_rcv_saddr),
@@ -596,7 +598,7 @@ void paced_chirping_init(struct sock *sk, struct tcp_sock *tp,
 
 	cmpxchg(&sk->sk_pacing_status, SK_PACING_NONE, SK_PACING_NEEDED);
 
-	pc->gap_avg_ns = INITIAL_GAP_AVG
+	pc->gap_avg_ns = INITIAL_GAP_AVG;
 	pc->chirp_number = 0;
 	pc->round_start = 0;
 	pc->round_sent = 0;

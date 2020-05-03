@@ -6,6 +6,8 @@
 #include <linux/inet_diag.h>
 #include <linux/module.h>
 
+#define INITIAL_GAP_AVG 200000 /* 200 us */
+
 /* Paced Chirping defines
  * All of these defined should probably be made surely unique */
 
