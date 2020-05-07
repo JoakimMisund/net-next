@@ -27,6 +27,7 @@
 #define EXIT_BOGUS 0
 #define EXIT_LOSS 1
 #define EXIT_TRANSITION 2
+#define EXIT_DELAY_INCREASE 4
 
 /* Debugging */
 #define PC_DEBUG 0
@@ -49,6 +50,8 @@ struct cc_chirp {
 	u16 N;            /* The number of packets/segments in this chirp */
 	u16 qdelay_index; /* Used to record the measured queue delays */
 	u16 ack_cnt;      /* The number of acks received. ack_cnt <= N*/
+
+	u32 min_q_delay;
 
 	u32 begin_seq;    /* Sequence number of first segment in chirp */
 	u32 end_seq;      /* Sequence number of first segment after last segment in the chirp */

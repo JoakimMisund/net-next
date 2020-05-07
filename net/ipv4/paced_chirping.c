@@ -17,7 +17,7 @@
 
 /* Algorithm functions */
 static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *pc);
-static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc);
+static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc, struct cc_chirp *chirp);
 static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc,
 			   u32 new_estimate_ns, u32 chirp_number);
 static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp);
@@ -43,7 +43,6 @@ int paced_chirping_active(struct paced_chirping *pc)
 {
 	return pc->pc_state & STATE_ACTIVE;
 }
-EXPORT_SYMBOL(paced_chirping_active);
 
 void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 {
@@ -82,7 +81,6 @@ void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 		   (u32)pc->geometry,
 		   MEMORY_CACHE_SIZE_BYTES));
 }
-EXPORT_SYMBOL(paced_chirping_exit);
 
 void paced_chirping_release(struct paced_chirping *pc)
 {
@@ -97,7 +95,6 @@ void paced_chirping_release(struct paced_chirping *pc)
 	if (pc->memory_cache)
 		kfree(pc->memory_cache);
 }
-EXPORT_SYMBOL(paced_chirping_release);
 
 static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *pc)
 {
@@ -112,9 +109,18 @@ static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *p
 	pc->round_start = pc->chirp_number;
 	pc->round_sent = pc->round_length_us = 0;
 }
-static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc)
+static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc, struct cc_chirp *chirp)
 {
-	return tcp_min_rtt(tp) && (tcp_min_rtt(tp) <= pc->round_length_us);
+	/* Terminate if min rtt is filled */
+	if (pc && tcp_min_rtt(tp) && (tcp_min_rtt(tp) <= pc->round_length_us))
+		return EXIT_TRANSITION;
+
+	/* Terminate if minimum queue delay is greater than 
+	 * the estimate we have times 2^5 (2^5 / 2^10) */
+	if (pc && chirp && (pc->gap_avg_ns >> 5) < (chirp->min_q_delay))
+		return EXIT_DELAY_INCREASE;
+
+	return 0;
 }
 static struct cc_chirp* get_first_chirp(struct paced_chirping *pc)
 {
@@ -294,6 +300,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	new_chirp->end_seq = new_chirp->begin_seq = tp->snd_nxt;
 	new_chirp->qdelay_index = 0;
 	new_chirp->ack_cnt = 0;
+	new_chirp->min_q_delay = U32_MAX;
 
 
 	pc->round_sent += 1;
@@ -318,7 +325,6 @@ LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,INFO:sched_chirp=%d,avg=%d,guard=%d,N=%
 
 	return 0;
 }
-EXPORT_SYMBOL(paced_chirping_new_chirp);
 
 
 
@@ -409,9 +415,11 @@ static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp)
 	return gap_avg;
 }
 
-int check_termination(struct sock *sk, struct tcp_sock *tp, struct paced_chirping *pc)
+int check_termination(struct sock *sk, struct tcp_sock *tp, struct paced_chirping *pc,
+		      struct cc_chirp *chirp)
 {
-	if (should_terminate(tp, pc)) {
+	u32 reason;
+	if ((reason = should_terminate(tp, pc, chirp))) {
 		u32 rate, cwnd;
 		/* Prevent division by 0. Should do something safer. */
 		pc->gap_avg_ns = max(1U, pc->gap_avg_ns);
@@ -444,11 +452,12 @@ int check_termination(struct sock *sk, struct tcp_sock *tp, struct paced_chirpin
 			   pc->round_length_us,
 			   tp->srtt_us >> 3,
 			   tcp_min_rtt(tp)));
-		return 1;
 	}
-	return 0;
+	return reason;
 }
 
+/* Maybe change return value to u32 so that tcp_prage or any other
+ * CC algorithm can change its reaction in case overshoot. */
 void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const struct rate_sample *rs)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -458,12 +467,14 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 	u32 i;
 	u32 new_estimate;
 	u64 cur_time, diff;
+	u32 qdelay;
+	u32 reason;
 
 	if (!pc->pc_state || rtt_us <= 0 || pkts_acked == 0)
 		return;
 
 	/* Check if Paced Chirping should terminate, and do so if. */
-	if (check_termination(sk, tp, pc))
+	if ((reason = check_termination(sk, tp, pc, NULL)))
 		return;
 
 	if(!(c = get_first_chirp(pc)))
@@ -529,7 +540,9 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 			/* Does not (?) matter if we use minimum rtt for this chirp of for the duration of
 			 * the connection because the analysis uses relative queue delay in analysis.
 			 * Assumes no reordering or loss. Have to link seq number to array index. */
-			c->qdelay[c->qdelay_index++] = rtt_us - tcp_min_rtt(tp);
+			qdelay = rtt_us - tcp_min_rtt(tp);
+			c->qdelay[c->qdelay_index++] = qdelay;
+			c->min_q_delay = min(c->min_q_delay, qdelay);
 		}
 
 		/*Chirp is completed*/
@@ -540,8 +553,6 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 			new_estimate = analyze_chirp(sk, c);
 			update_gap_avg(tp, pc, new_estimate, c->chirp_number);
 
-			if (check_termination(sk, tp, pc))
-				return;
 
 			LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,chirp_num=%u,estimate=%u,new_avg=%u,pkts_out=%u,nxt_chirp=%u,min_rtt=%u,ack_cnt=%u\n",
 				   ntohl(sk->sk_rcv_saddr),
@@ -556,6 +567,9 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 				   tcp_min_rtt(tp),
 				   c->ack_cnt));
 
+			if ((reason = check_termination(sk, tp, pc, c)))
+				return;
+
 			/* Second round starts when the first chirp has been analyzed. */
 			if (c->chirp_number == 0U) {
 				start_new_round(tp, pc);
@@ -566,8 +580,6 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 		}
 	}
 }
-EXPORT_SYMBOL(paced_chirping_update);
-
 
 /* Must be called in init */
 void paced_chirping_init(struct sock *sk, struct tcp_sock *tp,
@@ -612,11 +624,6 @@ void paced_chirping_init(struct sock *sk, struct tcp_sock *tp,
 
 	pc->pc_state = STATE_ACTIVE;
 }
-EXPORT_SYMBOL(paced_chirping_init);
-
-
-
-
 
 
 
