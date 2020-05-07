@@ -97,8 +97,14 @@ static void dctcp_init(struct sock *sk)
 		ca->loss_cwnd = 0;
 		ca->ce_state = 0;
 
-		if (paced_chirping_enabled)
+		if (paced_chirping_enabled) {
 			paced_chirping_init(sk, tp, &ca->pc);
+			ca->dctcp_alpha = 0;
+		} else {
+			/* Change init function to take enabled/disabled */
+			ca->pc.pc_state = 0;
+			ca->pc.cur_chirp = NULL;
+		}
 
 		dctcp_reset(tp, ca);
 		return;
@@ -231,8 +237,12 @@ static u32 dctcp_cwnd_undo(struct sock *sk)
 static void dctcp_release(struct sock *sk)
 {
 	struct dctcp *ca = inet_csk_ca(sk);
+	struct tcp_sock *tp = tcp_sk(sk);
 	tcp_sk(sk)->ecn_flags &= ~TCP_ECN_ECT_1;
-	paced_chirping_release(&ca->pc);
+	if (paced_chirping_enabled) {
+		tp->chirp.scheduled_gaps = NULL;
+		paced_chirping_release(&ca->pc);
+	}
 }
 
 static void dctcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)

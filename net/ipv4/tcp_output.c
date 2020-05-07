@@ -1109,7 +1109,7 @@ static void tcp_update_skb_after_send(struct sock *sk, struct sk_buff *skb,
 		unsigned long rate = sk->sk_pacing_rate;
 
 		if (tp->is_chirping) {
-			struct paced_chirping_ext *pc_ext = skb_ext_find(skb, SKB_EXT_PACED_CHIRPING);
+			struct paced_chirping_ext *pc_ext = skb_ext_add(skb, SKB_EXT_PACED_CHIRPING);
 			if (tp->chirp.packets > tp->chirp.packets_out) {
 
 				struct chirp *chirp = &tp->chirp;
