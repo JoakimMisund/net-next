@@ -17,9 +17,12 @@
 
 /* Algorithm functions */
 static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *pc);
-static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc, struct cc_chirp *chirp);
+static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc,
+			    struct cc_chirp *chirp, u32 new_estimate_ns);
 static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc,
 			   u32 new_estimate_ns, u32 chirp_number);
+static void update_gap_avg_conservative(struct tcp_sock *tp, struct paced_chirping *pc,
+					u32 new_estimate_ns, int index, int N);
 static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp);
 
 
@@ -44,9 +47,18 @@ int paced_chirping_active(struct paced_chirping *pc)
 	return pc->pc_state & STATE_ACTIVE;
 }
 
+int is_invalid_estimate(u32 estimate)
+{
+	return estimate == INVALID_CHIRP_AGGREGATION ||
+		estimate == INVALID_CHIRP_SEND_GAP ||
+		estimate == INVALID_CHIRP_U32_OVERFLOW ||
+		estimate == 0;
+}
+
 void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
+	u64 rate, cwnd;
 
 	if (!paced_chirping_active(pc))
 		return;
@@ -54,24 +66,49 @@ void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 	/* When Paced Chirping decides that it should exit because it has
 	 * "filled the pipe" snd_cwnd and snd_ssthresh is set to match the
 	 * rate estimate. This calculation is run upon loss. */
-	if (pc->pc_state && reason != EXIT_TRANSITION) {
+	if (reason == EXIT_LOSS) {
 		tp->snd_cwnd = max(tp->packets_out >> 1U, 2U);
-		tp->snd_ssthresh = tp->snd_cwnd;
+	} else if (reason == EXIT_STRIKES) {
+		tp->snd_cwnd = max(tp->packets_out, 2U);
+	} else if (reason == EXIT_TRANSITION_FILLED ||
+		   reason == EXIT_TRANSITION_ESTIMATE ||
+		   reason == EXIT_DELAY_INCREASE) {
+		/* Prevent division by 0. Should do something safer. */
+		pc->gap_avg_ns = max(1U, pc->gap_avg_ns);
+		/* Performance-bound during development. */
+		pc->gap_avg_ns = min(5000000U, pc->gap_avg_ns);
+
+		rate = gap_to_Bps_ns(sk, tp, pc->gap_avg_ns);
+		sk->sk_pacing_rate = rate;
+
+		/* cwnd needed to fill min_rtt at a inter-packet gap of gap_avg_ns.
+		 * This makes the algorithm susceptible to under-utilization if
+		 * the RTT increases due to e.g. path change. */
+		cwnd = tcp_min_rtt(tp) * 1000U;
+		do_div(cwnd, pc->gap_avg_ns);
+		tp->snd_cwnd = max((u32)cwnd, 2U);
 	}
+	tp->snd_ssthresh = tp->snd_cwnd;
+
+	pc->pc_state = 0;
 	tp->is_chirping = 0;
+	//memset(&tp->chirp, 0, sizeof(struct chirp));
 	tp->disable_cwr_upon_ece = 0;
+	tp->disable_kernel_pacing_calculation = 0;
 	/* This will make the pacing rate 120% of that estimated when
 	 * the next ack is received, if cong_control is not implemented. */
-	tp->disable_kernel_pacing_calculation = 0;
-	pc->pc_state = 0;
 
-	LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,,exit=%u,gap=%u,cwnd=%u,min_rtt=%u,srtt=%u,round_length=%u,round_sent=%u,gain=%u,geometry=%u,cache=%lu\n",
+
+
+	LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,,exit=%u,gap=%u,gap_cons=%u,rate=%lu,cwnd=%u,min_rtt=%u,srtt=%u,round_length=%u,round_sent=%u,gain=%u,geometry=%u,cache=%lu\n",
 		   ntohl(sk->sk_rcv_saddr),
 		   ntohl(sk->sk_daddr),
 		   sk->sk_num,
 		   ntohs(sk->sk_dport),
 		   reason,
 		   pc->gap_avg_ns,
+		   pc->gap_avg_conservative_ns,
+		   sk->sk_pacing_rate,
 		   tp->snd_cwnd,
 		   tcp_min_rtt(tp),
 		   tp->srtt_us >> 3,
@@ -96,6 +133,54 @@ void paced_chirping_release(struct paced_chirping *pc)
 		kfree(pc->memory_cache);
 }
 
+static u32 calculate_inter_arrival_time(struct cc_chirp *chirp)
+{
+       u64 total_gap = chirp->inter_arrival_times[1];
+       u32 index;
+       for (index = 2; index < chirp->qdelay_index; ++index) {
+               total_gap += chirp->inter_arrival_times[index];
+       }
+       return (u32)(total_gap / (index-1));
+}
+
+static inline u32 estimate_indicate_undershoot(int index, int N)
+{
+       return index > ((N-1) - (N>>2) - (N>>3));
+}
+static inline u32 estimate_indicate_overshoot(int index, int N)
+{
+       return index < (N>>2) + (N>>3);
+}
+static inline u32 estimate_on_point(int index, int N)
+{
+       return !estimate_indicate_undershoot(index, N) &&
+               !estimate_indicate_overshoot(index, N);
+}
+
+static void update_geometry(struct paced_chirping *pc, int index, int N)
+{
+
+       /* Adjustment variant */
+       /* (-) 0.125 = 2/16 -> 2 << (G_G_SHIFT-4)*/
+       /* (+) 0.0625 = 2/32 -> 0.125 >> 1*/
+       u16 adjustment = 2 << (G_G_SHIFT-4);
+       u16 new_geometry = pc->geometry;
+
+       if (estimate_on_point(index, N) && /* Estimate is on point */
+           (pc->gap_avg_ns > (pc->gap_avg_conservative_ns>>1))) { /* Load is close to estimate */
+               new_geometry -= adjustment;
+       } else {
+               new_geometry += (adjustment>>1);
+       }
+
+       if ( (new_geometry >= (3 << (G_G_SHIFT-1))) && /* >= 1.5*/
+            (new_geometry <= (2 << (G_G_SHIFT)) ) ) { /* <= 2.0 */
+               pc->geometry = new_geometry;
+       }
+}
+
+
+
 static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *pc)
 {
 	/* We only increase the number of chirps if we have sent the first 6 chirps
@@ -109,16 +194,26 @@ static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *p
 	pc->round_start = pc->chirp_number;
 	pc->round_sent = pc->round_length_us = 0;
 }
-static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc, struct cc_chirp *chirp)
+static u32 should_terminate(struct tcp_sock *tp, struct paced_chirping *pc,
+			    struct cc_chirp *chirp, u32 new_estimate_ns)
 {
 	/* Terminate if min rtt is filled */
 	if (pc && tcp_min_rtt(tp) && (tcp_min_rtt(tp) <= pc->round_length_us))
-		return EXIT_TRANSITION;
+		return EXIT_TRANSITION_FILLED;
+
+	if (pc && chirp && chirp->geometry <= ((3 << (G_G_SHIFT-1)) + (2 << (G_G_SHIFT-3))) &&
+	    estimate_on_point(chirp->excursion_index, chirp->N) &&
+	    !is_invalid_estimate(new_estimate_ns) &&
+	    (pc->gap_avg_ns <= new_estimate_ns))
+		return EXIT_TRANSITION_ESTIMATE;
 
 	/* Terminate if minimum queue delay is greater than 
 	 * the estimate we have times 2^5 (2^5 / 2^10) */
 	if (pc && chirp && (pc->gap_avg_ns >> 5) < (chirp->min_q_delay))
 		return EXIT_DELAY_INCREASE;
+
+	if (pc && pc->strikes >= 10U)
+		return EXIT_STRIKES;
 
 	return 0;
 }
@@ -140,7 +235,7 @@ static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc,
 {
 	u32 prev_estimate_ns = pc->gap_avg_ns;
 
-	if (new_estimate_ns == INVALID_CHIRP) {
+	if (is_invalid_estimate(new_estimate_ns)) {
 		return;
 	}
 	/* Safety bound for development min 20us, max 10ms (600Mbps ~ 1Mbps)*/
@@ -154,6 +249,27 @@ static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc,
 			(new_estimate_ns>>GAP_AVG_SHIFT);
 	}
 }
+
+static void update_gap_avg_conservative(struct tcp_sock *tp, struct paced_chirping *pc, u32 new_estimate_ns, int index, int N)
+{
+       if (is_invalid_estimate(new_estimate_ns)) {
+               return;
+       }
+
+       if (estimate_on_point(index, N)) /* Estimate that builds confidence. */
+               pc->gap_avg_conservative_ns = pc->gap_avg_conservative_ns -
+                       (pc->gap_avg_conservative_ns>>(GAP_AVG_SHIFT)) +
+                       (new_estimate_ns>>(GAP_AVG_SHIFT));
+       else if (estimate_indicate_undershoot(index, N)) /* Estimate that indicates more capacity, be careful */
+               pc->gap_avg_conservative_ns = pc->gap_avg_conservative_ns -
+                       (pc->gap_avg_conservative_ns>>(GAP_AVG_SHIFT+1)) +
+                       (new_estimate_ns>>(GAP_AVG_SHIFT+1));
+       else /* Indicate overshoot*/
+	       pc->gap_avg_conservative_ns = pc->gap_avg_conservative_ns -
+                       (pc->gap_avg_conservative_ns>>GAP_AVG_SHIFT) +
+                       (new_estimate_ns>>GAP_AVG_SHIFT);
+}
+
 
 static bool enough_data_for_chirp (struct sock *sk, struct tcp_sock *tp, int N)
 {
@@ -287,6 +403,11 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 		max((u64)pc->gap_avg_ns, (u64)guard_interval_ns - (u64)chirp_length_ns) :
 		pc->gap_avg_ns;
 
+	/* Uncomment to use conservative gap*/
+	/*guard_interval_ns = pc->gap_avg_ns;
+	if (pc->gap_avg_conservative_ns > pc->gap_avg_ns)
+	guard_interval_ns = pc->gap_avg_conservative_ns + (N-1) * (pc->gap_avg_conservative_ns - pc->gap_avg_ns);*/
+
 	/* Provide the kernel with the pacing information */
 	tp->chirp.packets = new_chirp->N = N;
 	tp->chirp.gap_ns = initial_gap_ns;
@@ -300,6 +421,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	new_chirp->end_seq = new_chirp->begin_seq = tp->snd_nxt;
 	new_chirp->qdelay_index = 0;
 	new_chirp->ack_cnt = 0;
+	new_chirp->geometry = pc->geometry;
 	new_chirp->min_q_delay = U32_MAX;
 
 
@@ -308,10 +430,10 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	pc->round_length_us += (pc->gap_avg_ns>>10) + (chirp_length_ns>>10);
 
 	list_add_tail(&(new_chirp->list), &(pc->chirp_list->list));
-	tp->snd_cwnd += N;
+	tp->snd_cwnd = tp->packets_out + N + 2;
 
 
-LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,INFO:sched_chirp=%d,avg=%d,guard=%d,N=%u,length_us=%llu,round_length=%u\n",
+	LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,INFO:sched_chirp=%d,avg=%d,guard=%d,N=%u,length_us=%llu,round_length=%u\n",
 		   ntohl(sk->sk_rcv_saddr),
 		   ntohl(sk->sk_daddr),
 		   sk->sk_num,
@@ -353,14 +475,12 @@ static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp)
 	print_u32_array(q, N, "queue", sk);
 	print_u64_array(chirp->inter_arrival_times, N, "interarr", sk);
 
-	if (N < 2)
-		return INVALID_CHIRP;
 	if (chirp->ack_cnt < (N>>1)) /* Ack aggregation is too great. This might be too strict. */
-		return INVALID_CHIRP;
+		return INVALID_CHIRP_AGGREGATION;
 	for (i = 1; i < N; ++i) {
 
 		if (i < (N-1) && (s[i]<<1) < s[i+1])
-			return INVALID_CHIRP;
+			return INVALID_CHIRP_SEND_GAP;
 		E[i] = 0;
 		/*Check if currently tracking a possible excursion*/
 		q_diff = (int)q[i] - (int)q[excursion_start];
@@ -409,49 +529,19 @@ static u32 analyze_chirp(struct sock *sk, struct cc_chirp *chirp)
 	}
 	print_u32_array(E, N, "E", sk);
 
+	chirp->excursion_index = l;
 	gap_avg = gap_avg/(N-1);
 	if (gap_avg > U32_MAX)
-		gap_avg = INVALID_CHIRP;
+		gap_avg = INVALID_CHIRP_U32_OVERFLOW;
 	return gap_avg;
 }
 
 int check_termination(struct sock *sk, struct tcp_sock *tp, struct paced_chirping *pc,
-		      struct cc_chirp *chirp)
+		      struct cc_chirp *chirp, u32 new_estimate)
 {
 	u32 reason;
-	if ((reason = should_terminate(tp, pc, chirp))) {
-		u32 rate, cwnd;
-		/* Prevent division by 0. Should do something safer. */
-		pc->gap_avg_ns = max(1U, pc->gap_avg_ns);
-		/* Performance-bound during development. */
-		pc->gap_avg_ns = min(5000000U, pc->gap_avg_ns);
-
-		rate = gap_to_Bps_ns(sk, tp, pc->gap_avg_ns);
-		sk->sk_pacing_rate = rate;
-
-		/* cwnd needed to fill min_rtt at a inter-packet gap of gap_avg_ns.
-		 * This makes the algorithm susceptible to under-utilization if
-		 * the RTT increases due to e.g. path change. It should be noted that the 
-		 * termination condition uses srtt. srtt might include a standing queue. */
-		cwnd = (u32)(((u64)tcp_min_rtt(tp) * 1000UL)/(u64)pc->gap_avg_ns);
-		tp->snd_cwnd = max(max(cwnd, tp->packets_out), 2U);
-		tp->snd_ssthresh = tp->snd_cwnd;
-
-		/* Terminate right away. Transition phase is necessary (to ensure filled pipe)
-		 * only if pacing is to be turned off as paced chirping exits. For now assume that
-		 * pacing is kept on. An other option is to wait for the last chirp to be sent into the network.
-		 * This change should improve responsiveness. */
-		paced_chirping_exit(sk, pc, EXIT_TRANSITION);
-
-		LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,final_gap=%u,cwnd=%d,rate_Bps=%u,length=%u,srtt=%u,minrtt=%u\n",
-			   ntohl(sk->sk_rcv_saddr),
-			   ntohl(sk->sk_daddr),
-			   sk->sk_num,
-			   ntohs(sk->sk_dport),
-			   pc->gap_avg_ns, tp->snd_cwnd,rate,
-			   pc->round_length_us,
-			   tp->srtt_us >> 3,
-			   tcp_min_rtt(tp)));
+	if ((reason = should_terminate(tp, pc, chirp, new_estimate))) {
+		paced_chirping_exit(sk, pc, reason);
 	}
 	return reason;
 }
@@ -474,17 +564,11 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 		return;
 
 	/* Check if Paced Chirping should terminate, and do so if. */
-	if ((reason = check_termination(sk, tp, pc, NULL)))
+	if ((reason = check_termination(sk, tp, pc, NULL, 0)))
 		return;
 
 	if(!(c = get_first_chirp(pc)))
 		return;
-
-	/* Inter-arrival times are currently unused. They were used for the two first chirps/bursts
-	 * in the first version of the code. Undecided whether to use it or not. */
-	cur_time = ktime_to_ns(ktime_get_real());
-	diff = cur_time - c->inter_arrival_times[0];
-	diff = diff/pkts_acked;
 
 	if (pkts_acked)
 		c->ack_cnt++;
@@ -535,6 +619,9 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 		}
 
 		if (c->qdelay_index != c->N) {
+			cur_time = ktime_to_ns(ktime_get_real());
+			diff = cur_time - c->inter_arrival_times[0];
+			diff = diff/pkts_acked;
 			c->inter_arrival_times[c->qdelay_index] = diff;
 			c->inter_arrival_times[0] = cur_time;
 			/* Does not (?) matter if we use minimum rtt for this chirp of for the duration of
@@ -546,15 +633,29 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 		}
 
 		/*Chirp is completed*/
-		if (c->qdelay_index >= c->N &&
-		    ((c->end_seq != c->begin_seq)
-		     && !after(c->end_seq, tp->snd_una))) {
+		if (c->qdelay_index >= c->N &&          /* Received acks for all packets*/
+		    ((c->end_seq != c->begin_seq) &&    /* All packets have been sent */
+		     !after(c->end_seq, tp->snd_una))) { /* Highest acked seq is after last packets seq*/
 
 			new_estimate = analyze_chirp(sk, c);
-			update_gap_avg(tp, pc, new_estimate, c->chirp_number);
+
+			if (!is_invalid_estimate(new_estimate)) {
+				if (c->excursion_index <= 2 &&
+				    c->N <= 8 &&
+				    c->ack_cnt >= (c->N>>1)) {
+					/* Take max as this is to prevent overshoot */
+					new_estimate = max(new_estimate, calculate_inter_arrival_time(c));
+				}
+
+				update_gap_avg(tp, pc, new_estimate, c->chirp_number);
+				update_gap_avg_conservative(tp, pc, new_estimate, c->excursion_index, c->N);
+				update_geometry(pc, c->excursion_index, c->N);
+			} else {
+				pc->strikes++;
+			}
 
 
-			LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,chirp_num=%u,estimate=%u,new_avg=%u,pkts_out=%u,nxt_chirp=%u,min_rtt=%u,ack_cnt=%u\n",
+			LOG_PRINT((KERN_INFO "[PC] %u-%u-%hu-%hu,chirp_num=%u,estimate=%u,new_avg=%u,new_avg_cons=%u,pkts_out=%u,nxt_chirp=%u,min_rtt=%u,ack_cnt=%u\n",
 				   ntohl(sk->sk_rcv_saddr),
 				   ntohl(sk->sk_daddr),
 				   sk->sk_num,
@@ -562,12 +663,13 @@ void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const str
 				   c->chirp_number,
 				   new_estimate,
 				   pc->gap_avg_ns,
+				   pc->gap_avg_conservative_ns,
 				   tp->packets_out,
 				   pc->chirp_number,
 				   tcp_min_rtt(tp),
 				   c->ack_cnt));
 
-			if ((reason = check_termination(sk, tp, pc, c)))
+			if ((reason = check_termination(sk, tp, pc, c, new_estimate)))
 				return;
 
 			/* Second round starts when the first chirp has been analyzed. */
@@ -613,10 +715,12 @@ void paced_chirping_init(struct sock *sk, struct tcp_sock *tp,
 	cmpxchg(&sk->sk_pacing_status, SK_PACING_NONE, SK_PACING_NEEDED);
 
 	pc->gap_avg_ns = INITIAL_GAP_AVG;
+	pc->gap_avg_conservative_ns = max(pc->gap_avg_ns, (tcp_min_rtt(tp) * 100)); /* rtt_us*1000/10 */
 	pc->chirp_number = 0;
 	pc->round_start = 0;
 	pc->round_sent = 0;
 	pc->round_length_us = 0;
+	pc->strikes = 0;
 
 	pc->M = (2<<M_SHIFT);
 	pc->gain = max(paced_chirping_initial_gain, 1U << G_G_SHIFT);

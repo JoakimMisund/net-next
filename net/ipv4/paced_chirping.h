@@ -6,7 +6,7 @@
 #include <linux/inet_diag.h>
 #include <linux/module.h>
 
-#define INITIAL_GAP_AVG 200000 /* 200 us */
+#define INITIAL_GAP_AVG 200000U /* 200 us */
 
 /* Paced Chirping defines
  * All of these defined should probably be made surely unique */
@@ -15,8 +15,9 @@
 #define MARKING_PKT_SENT 0x40
 #define MARKING_PKT_RECVD 0x80
 
-#define INVALID_CHIRP UINT_MAX    /* Used to ignore information from a chirp,
-				   * e.g if ack aggregation is too great */
+#define INVALID_CHIRP_AGGREGATION U32_MAX
+#define INVALID_CHIRP_SEND_GAP (U32_MAX-1U)
+#define INVALID_CHIRP_U32_OVERFLOW (U32_MAX-2U)
 
 #define GAP_AVG_SHIFT 1           /* Average gap shift */
 #define M_SHIFT 4                 /* M shift to allow for fractional values */
@@ -24,10 +25,12 @@
 #define CHIRP_SIZE 16U
 
 /* Used for logging/debugging */
-#define EXIT_BOGUS 0
-#define EXIT_LOSS 1
-#define EXIT_TRANSITION 2
-#define EXIT_DELAY_INCREASE 4
+#define EXIT_BOGUS               0
+#define EXIT_LOSS                1<<0
+#define EXIT_TRANSITION_FILLED   1<<1
+#define EXIT_TRANSITION_ESTIMATE 1<<2
+#define EXIT_DELAY_INCREASE      1<<3
+#define EXIT_STRIKES             1<<4
 
 /* Debugging */
 #define PC_DEBUG 0
@@ -47,11 +50,14 @@ struct cc_chirp {
 	u8 mem_flag;
 
 	u16 chirp_number; /* Chirp number, first chirp has number 0 */
-	u16 N;            /* The number of packets/segments in this chirp */
-	u16 qdelay_index; /* Used to record the measured queue delays */
-	u16 ack_cnt;      /* The number of acks received. ack_cnt <= N*/
+	u8 N;            /* The number of packets/segments in this chirp */
+	u8 qdelay_index; /* Used to record the measured queue delays */
+	u8 ack_cnt;      /* The number of acks received. ack_cnt <= N*/
+	u16 geometry;     /* Geometry used when scheduled chirp */
 
+	/* Theses do not to be in this struct */
 	u32 min_q_delay;
+	u8  excursion_index;
 
 	u32 begin_seq;    /* Sequence number of first segment in chirp */
 	u32 end_seq;      /* Sequence number of first segment after last segment in the chirp */
@@ -70,6 +76,7 @@ struct paced_chirping {
 	struct cc_chirp *chirp_list;
 
 	u32 gap_avg_ns;      /* Average gap (estimate). Chirps are sent out with a average gap of this value. */
+	u32 gap_avg_conservative_ns;
 	u32 round_length_us; /* Used for termination condition. It is an approximate calculation of how much
 			      * time all the chirps in the current round take up */
 	u32 chirp_number;    /* The next chirp number */
@@ -78,6 +85,7 @@ struct paced_chirping {
 	u32 round_sent;      /* Number of chirps sent in the round */
 	u16 gain;            /* How much M is increased in-between rounds. M *= gain */
 	u16 geometry;        /* Controls the range of the gaps within each chirp  */
+	u8 strikes;          /* Used to abort paced chirping if ack aggregation or send_gap precision issues*/
 
 	/* Memory caching
 	 * Experimenting with allocating memory for the cc_chirp structures at the start of the flow to
