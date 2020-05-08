@@ -224,6 +224,7 @@ static void prague_cong_control(struct sock *sk, const struct rate_sample *rs)
 {
 	struct prague *ca = inet_csk_ca(sk);
 	if (paced_chirping_enabled && paced_chirping_active(&ca->pc)) {
+		/* Todo: Alter alpha based on exit condition */
 		paced_chirping_update(sk, &ca->pc, rs);
 		return;
 	}
