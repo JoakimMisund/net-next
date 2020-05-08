@@ -164,6 +164,69 @@ static bool enough_data_committed(struct sock *sk, struct tcp_sock *tp)
 	return SKB_TRUESIZE(tp->mss_cache) * CHIRP_SIZE  < refcount_read(&sk->sk_wmem_alloc);
 }
 
+u32 create_chirp(struct tcp_sock *tp, u32 N, u32 gap_avg_ns, u32 geometry,
+		 u64 *scheduled_gaps, u64 *chirp_length_ns)
+{
+	u64 gap_step_ns;
+	u64 initial_gap_ns;
+	u64 chirp_length_ns;
+
+	if (!tp->is_chirping) {
+		return 1;
+	}
+        /* A chirp consists of N packets sent with decreasing inter-packet time (increasing rate).
+	 *
+	 * Gap between packet i-1 and i is initial_gap_ns - gap_step_ns * i, where i >= 2 (second packet)
+	 *
+	 * initial_gap_ns is the inter-packet time between the first and second packet
+	 * It is set to the average gap in the chirp times the geometry. Geometry is in the range (1.0, 3.0]
+	 *
+	 * gap_step_ns is the magnitude of the negative slope of the inter-packet times
+	 *                   target average gap * (geometry - 1) * 2
+	 * gap_step_ns =     ----------------------------------------
+	 *                                      N
+	 * This calculation makes the actual average gap slightly higher than the target average gap.
+	 *
+	 *
+	 * guard_interval_ns is the time in-between chirps needed to spread the chirps evenly across the measured SRTT.
+	 * We try to keep M chirp in flight each round. The code handles overflow in subtraction.
+	 *
+	 * guard_interval_ns = MAX( SRTT/M - chirp length , target average gap )
+	 *
+	 *
+	 * The chirp length is the total sum of the gaps between the packets in a chirp.
+	 * Denote initial gap by a, and step by s.
+	 * |pkt| -------- |pkt| ------- |pkt| ------ |pkt| ----- |pkt| ----- |pkt| ...
+	 *          a            (a-s)        (a-2s)       (a-3s)      (a-4s)      ...
+	 *
+	 * The sum is a + (a-s) + (a-2s) + ... + (a-(N-2)s)
+	 *            = (N-1) * a - (1 + 2 + ... + (N-2)) * s
+	 *            = (N-1) * a - s * (N-2)*(N-1)/2
+	 */
+	/* Calculate the gap between the first two packets */
+	initial_gap_ns = ((u64)gap_avg_ns * (u64)geometry)>>G_G_SHIFT;
+
+	/* Calculate the linear decrease in inter-packet gap */
+	gap_step_ns = (u64)gap_avg_ns * ((geometry - (1<<G_G_SHIFT))<<1);
+	gap_step_ns += N - 1; /* Round up */
+	do_div(gap_step_ns, N);
+	gap_step_ns >>= G_G_SHIFT;
+
+	/* Calculate the total length of the chirp. Can be used with M to calculate the guard interval*/
+	if (chirp_length_ns)
+		*chirp_length_ns = (N-1) * initial_gap_ns - gap_step_ns * (((N-2)*(N-1))>>1);
+
+	/* Provide the kernel with the pacing information */
+	tp->chirp.gap_ns = initial_gap_ns;
+	tp->chirp.gap_step_ns = gap_step_ns;
+	tp->chirp.guard_interval_ns = initial_gap_ns;
+	tp->chirp.scheduled_gaps = scheduled_gaps;
+	tp->chirp.packets = N;
+	tp->chirp.packets_out = 0;
+
+	return 0;
+}
+
 /* Callback that kernel calls when it has packets to be sent but either has no chirp description or 
  * used the current one. */
 u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
@@ -238,62 +301,20 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 		tp->snd_cwnd++;
 		return 0;
 	}
-        /* A chirp consists of N packets sent with decreasing inter-packet time (increasing rate).
-	 *
-	 * Gap between packet i-1 and i is initial_gap_ns - gap_step_ns * i, where i >= 2 (second packet)
-	 *
-	 * initial_gap_ns is the inter-packet time between the first and second packet
-	 * It is set to the average gap in the chirp times the geometry. Geometry is in the range (1.0, 3.0]
-	 *
-	 * gap_step_ns is the magnitude of the negative slope of the inter-packet times
-	 *                   target average gap * (geometry - 1) * 2
-	 * gap_step_ns =     ----------------------------------------
-	 *                                      N
-	 * This calculation makes the actual average gap slightly higher than the target average gap.
-	 *
-	 *
-	 * guard_interval_ns is the time in-between chirps needed to spread the chirps evenly across the measured SRTT.
-	 * We try to keep M chirp in flight each round. The code handles overflow in subtraction.
-	 *
-	 * guard_interval_ns = MAX( SRTT/M - chirp length , target average gap )
-	 *
-	 *
-	 * The chirp length is the total sum of the gaps between the packets in a chirp.
-	 * Denote initial gap by a, and step by s.
-	 * |pkt| -------- |pkt| ------- |pkt| ------ |pkt| ----- |pkt| ----- |pkt| ...
-	 *          a            (a-s)        (a-2s)       (a-3s)      (a-4s)      ...
-	 *
-	 * The sum is a + (a-s) + (a-2s) + ... + (a-(N-2)s)
-	 *            = (N-1) * a - (1 + 2 + ... + (N-2)) * s
-	 *            = (N-1) * a - s * (N-2)*(N-1)/2
-	 */
-	/* Calculate the gap between the first two packets */
-	initial_gap_ns = ((u64)pc->gap_avg_ns * (u64)pc->geometry)>>G_G_SHIFT;
 
-	/* Calculate the linear decrease in inter-packet gap */
-	gap_step_ns = (u64)pc->gap_avg_ns * ((pc->geometry - (1<<G_G_SHIFT))<<1);
-	gap_step_ns += N - 1; /* Round up */
-	do_div(gap_step_ns, N);
-	gap_step_ns >>= G_G_SHIFT;
-
-	/* Calculate the total length of the chirp. Can be used with M to calculate the guard interval*/
-	chirp_length_ns = (N-1) * initial_gap_ns - gap_step_ns * (((N-2)*(N-1))>>1);
+	if (create_chirp(tp, N, pc->gap_avg_ns, pc->geometry,
+			 new_chirp->scheduled_gaps, &chirp_length_ns))
+		return 0;
 
 	/* Calculate the guard interval */
-	/* The way to do it if M is used. */
 	guard_interval_ns = (tp->srtt_us>>3) << 10;   /* Whole RTT in approx ns */
 	do_div(guard_interval_ns, pc->M>>M_SHIFT);   /* Divided up in M pieces */
 	guard_interval_ns = (guard_interval_ns > chirp_length_ns) ?
 		max((u64)pc->gap_avg_ns, (u64)guard_interval_ns - (u64)chirp_length_ns) :
 		pc->gap_avg_ns;
 
-	/* Provide the kernel with the pacing information */
-	tp->chirp.packets = new_chirp->N = N;
-	tp->chirp.gap_ns = initial_gap_ns;
-	tp->chirp.gap_step_ns = gap_step_ns;
+	/* Set the guard interval */
 	tp->chirp.guard_interval_ns = guard_interval_ns;
-	tp->chirp.scheduled_gaps = new_chirp->scheduled_gaps;
-	tp->chirp.packets_out = 0;
 
 	/* Save needed info */
 	new_chirp->chirp_number = pc->chirp_number++;
@@ -301,6 +322,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 	new_chirp->qdelay_index = 0;
 	new_chirp->ack_cnt = 0;
 	new_chirp->min_q_delay = U32_MAX;
+	new_chirp->N = N;
 
 
 	pc->round_sent += 1;
