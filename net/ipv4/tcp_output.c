@@ -1109,9 +1109,8 @@ static void tcp_update_skb_after_send(struct sock *sk, struct sk_buff *skb,
 		unsigned long rate = sk->sk_pacing_rate;
 
 		if (tp->is_chirping) {
-			struct paced_chirping_ext *pc_ext = skb_ext_add(skb, SKB_EXT_PACED_CHIRPING);
 			if (tp->chirp.packets > tp->chirp.packets_out) {
-
+				struct paced_chirping_ext *pc_ext = skb_ext_add(skb, SKB_EXT_PACED_CHIRPING);
 				struct chirp *chirp = &tp->chirp;
 				u64 len_ns = chirp->gap_ns;
 				u64 credit = tp->tcp_wstamp_ns - prior_wstamp;
@@ -1146,8 +1145,6 @@ static void tcp_update_skb_after_send(struct sock *sk, struct sk_buff *skb,
 					if (chirp->scheduled_gaps)
 						chirp->scheduled_gaps[chirp->packets_out] = credit + len_ns;	
 				}
-			} else {
-				paced_chirping_not_in_chirp(skb);
 			}
 		}
 		/* Original sch_fq does not pace first 10 MSS
