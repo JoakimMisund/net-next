@@ -103,7 +103,6 @@ static void dctcp_init(struct sock *sk)
 		} else {
 			/* Change init function to take enabled/disabled */
 			ca->pc.pc_state = 0;
-			ca->pc.cur_chirp = NULL;
 		}
 
 		dctcp_reset(tp, ca);
