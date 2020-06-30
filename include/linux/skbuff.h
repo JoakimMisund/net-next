@@ -4150,7 +4150,6 @@ enum skb_ext_id {
 #if IS_ENABLED(CONFIG_PACED_CHIRPING)
 	SKB_EXT_PACED_CHIRPING,
 #endif
-
 	SKB_EXT_NUM, /* must be last */
 };
 

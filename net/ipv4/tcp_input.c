@@ -3283,7 +3283,9 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 
 		if (icsk->icsk_ca_ops->pkt_acked) {
 			icsk->icsk_ca_ops->pkt_acked(sk, skb);
+#if IS_ENABLED(CONFIG_PACED_CHIRPING)
 			skb_ext_del(skb, SKB_EXT_PACED_CHIRPING);
+#endif
 		}
 
 		next = skb_rb_next(skb);

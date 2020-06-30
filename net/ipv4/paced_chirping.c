@@ -68,6 +68,7 @@ int packed_chirping_packet_in_chirp(struct sk_buff *skb)
 	return pc_ext && (pc_ext->scheduled_gap != U64_MAX);
 
 }
+EXPORT_SYMBOL(paced_chirping_active);
 
 void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 {
@@ -103,6 +104,7 @@ void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
 		   (u32)pc->geometry,
 		   MEMORY_CACHE_SIZE_BYTES));
 }
+EXPORT_SYMBOL(paced_chirping_exit);
 
 void paced_chirping_release(struct paced_chirping *pc)
 {
@@ -113,6 +115,7 @@ void paced_chirping_release(struct paced_chirping *pc)
 	}
 	return;
 }
+EXPORT_SYMBOL(paced_chirping_release);
 
 static inline void start_new_round(struct tcp_sock *tp, struct paced_chirping *pc)
 {
@@ -158,6 +161,7 @@ static void update_gap_avg(struct tcp_sock *tp, struct paced_chirping *pc,
 		(prev_estimate_ns>>GAP_AVG_SHIFT) +
 		(new_estimate_ns>>GAP_AVG_SHIFT);
 }
+EXPORT_SYMBOL(update_gap_avg);
 
 static bool enough_data_for_chirp (struct sock *sk, struct tcp_sock *tp, int N)
 {
@@ -292,6 +296,7 @@ u32 paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc)
 
 	return 0;
 }
+EXPORT_SYMBOL(paced_chirping_new_chirp);
 
 int check_termination(struct sock *sk, struct tcp_sock *tp, struct paced_chirping *pc)
 {
@@ -555,6 +560,7 @@ void paced_chirping_pkt_acked(struct sock *sk, struct paced_chirping *pc, struct
 		paced_chirping_reset_chirp(c);
 	}
 }
+EXPORT_SYMBOL(paced_chirping_update);
 
 void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const struct rate_sample *rs)
 {
@@ -594,6 +600,7 @@ void paced_chirping_init(struct sock *sk, struct tcp_sock *tp,
 		paced_chirping_reset_chirp(pc->cur_chirp);
 	}
 }
+EXPORT_SYMBOL(paced_chirping_init);
 
 static u32 gap_to_Bps_ns(struct sock *sk, struct tcp_sock *tp, u32 gap_ns)
 {

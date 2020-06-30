@@ -88,6 +88,7 @@ struct paced_chirping {
 };
 
 
+#if IS_ENABLED(CONFIG_PACED_CHIRPING)
 /*Paced Chirping parameters*/
 static unsigned int paced_chirping_enabled __read_mostly = 0;
 module_param(paced_chirping_enabled, uint, 0644);
@@ -104,6 +105,7 @@ MODULE_PARM_DESC(paced_chirping_initial_geometry, "Initial geometry for paced ch
 static unsigned int paced_chirping_L __read_mostly = 5;
 module_param(paced_chirping_L, uint, 0644);
 MODULE_PARM_DESC(paced_chirping_L, "Number of packets that make up an excursion");
+
 
 /*************** Public functions ****************/
 /* TCP CC modules must implement new_chirp and release.
@@ -125,11 +127,38 @@ MODULE_PARM_DESC(paced_chirping_L, "Number of packets that make up an excursion"
  */
 
 void paced_chirping_init(struct sock *sk, struct tcp_sock *tp, struct paced_chirping *pc);
-u32  paced_chirping_new_chirp (struct sock *sk, struct paced_chirping *pc);
+u32  paced_chirping_new_chirp(struct sock *sk, struct paced_chirping *pc);
 void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const struct rate_sample *rs);
 void paced_chirping_pkt_acked(struct sock *sk, struct paced_chirping *pc, struct sk_buff *skb);
 int  paced_chirping_active(struct paced_chirping *pc);
 void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason);
 void paced_chirping_release(struct paced_chirping* pc);
+
+#else
+
+static unsigned int paced_chirping_enabled __read_mostly = 0;
+
+void paced_chirping_init(struct sock *sk, struct tcp_sock *tp, struct paced_chirping *pc)
+{
+}
+u32  paced_chirping_new_chirp(struct sock *sk, struct paced_chirping *pc)
+{
+	return 0;
+}
+void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const struct rate_sample *rs)
+{
+}
+int  paced_chirping_active(struct paced_chirping *pc)
+{
+	return 0;
+}
+void paced_chirping_exit(struct sock *sk, struct paced_chirping *pc, u32 reason)
+{
+}
+void paced_chirping_release(struct paced_chirping* pc)
+{
+}
+
+#endif
 
 #endif

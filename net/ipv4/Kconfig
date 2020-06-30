@@ -762,3 +762,5 @@ config PACED_CHIRPING
        bool
        select SKB_EXTENSIONS
        default y
+       ---help---
+       Includes Paced Chirping code into the kernel.

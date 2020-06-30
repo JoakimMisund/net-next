@@ -40,6 +40,7 @@
 #include <net/inet_ecn.h>
 #include <net/dst.h>
 #include <net/mptcp.h>
+#include <net/paced_chirping.h>
 
 #include <linux/seq_file.h>
 #include <linux/memcontrol.h>
@@ -1189,7 +1190,7 @@ struct tcp_congestion_ops {
 	 * and stack does not have a chirp description available.
 	 */
 	u32 (*new_chirp)(struct sock *sk);
-
+	/* Call when a packet is removed from the retransmit queue. */
 	void (*pkt_acked)(struct sock *sk, struct sk_buff *skb);
 
 	/* get info for inet_diag (optional) */
