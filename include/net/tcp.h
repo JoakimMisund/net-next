@@ -40,6 +40,7 @@
 #include <net/inet_ecn.h>
 #include <net/dst.h>
 #include <net/mptcp.h>
+#include <net/paced_chirping.h>
 
 #include <linux/seq_file.h>
 #include <linux/memcontrol.h>
@@ -1175,6 +1176,13 @@ struct tcp_congestion_ops {
 	 * after all the ca_state processing. (optional)
 	 */
 	void (*cong_control)(struct sock *sk, const struct rate_sample *rs);
+	/* call when congestion control indicates that it is sending chirps
+	 * and stack does not have a chirp description available.
+	 */
+	u32 (*new_chirp)(struct sock *sk);
+	/* Call when a packet is removed from the retransmit queue. */
+	void (*pkt_acked)(struct sock *sk, struct sk_buff *skb);
+
 	/* get info for inet_diag (optional) */
 	size_t (*get_info)(struct sock *sk, u32 ext, int *attr,
 			   union tcp_cc_info *info);

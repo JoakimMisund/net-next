@@ -99,6 +99,23 @@ struct mptcp_options_received {
 };
 #endif
 
+
+#if IS_ENABLED(CONFIG_PACED_CHIRPING)
+struct chirp {
+	u16 packets;
+	u16 packets_out;
+	u32 gap_ns;
+	u32 gap_step_ns;
+	u32 guard_interval_ns;
+	u32 begin_seq;
+	u32 end_seq;
+	u16 chirp_number;
+	u64 *scheduled_gaps;
+};
+#endif
+
+
+
 struct tcp_options_received {
 /*	PAWS/RTTM data	*/
 	int	ts_recent_stamp;/* Time we stored ts_recent (for aging) */
@@ -357,6 +374,13 @@ struct tcp_sock {
 
 	struct hrtimer	pacing_timer;
 	struct hrtimer	compressed_ack_timer;
+
+#if IS_ENABLED(CONFIG_PACED_CHIRPING)
+	u32 is_chirping;
+	struct chirp chirp;
+#endif
+	u32 disable_cwr_upon_ece;
+	u32 disable_kernel_pacing_calculation;
 
 	/* from STCP, retrans queue hinting */
 	struct sk_buff* lost_skb_hint;

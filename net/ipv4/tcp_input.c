@@ -3431,6 +3431,13 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 		if (!fully_acked)
 			break;
 
+		if (icsk->icsk_ca_ops->pkt_acked) {
+			icsk->icsk_ca_ops->pkt_acked(sk, skb);
+#if IS_ENABLED(CONFIG_PACED_CHIRPING)
+			skb_ext_del(skb, SKB_EXT_PACED_CHIRPING);
+#endif
+		}
+
 		next = skb_rb_next(skb);
 		if (unlikely(skb == tp->retransmit_skb_hint))
 			tp->retransmit_skb_hint = NULL;
@@ -3613,7 +3620,8 @@ static void tcp_cong_control(struct sock *sk, u32 ack, u32 acked_sacked,
 		/* Advance cwnd if state allows */
 		tcp_cong_avoid(sk, ack, acked_sacked);
 	}
-	tcp_update_pacing_rate(sk);
+	if (!tcp_sk(sk)->disable_kernel_pacing_calculation)
+		tcp_update_pacing_rate(sk);
 }
 
 /* Check that window update is acceptable.
@@ -3981,7 +3989,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 			flag |= tcp_sacktag_write_queue(sk, skb, prior_snd_una,
 							&sack_state);
 		ecn_count = tcp_ecn_rcv_ecn_echo(tp, tcp_hdr(skb));
-		if (ecn_count > 0)
+		if (ecn_count > 0 && likely(!tp->disable_cwr_upon_ece))
 			flag |= FLAG_ECE;
 	}
 
@@ -5596,8 +5604,12 @@ send_now:
 	}
 
 	if (!ofo_possible || RB_EMPTY_ROOT(&tp->out_of_order_queue)) {
-		tcp_send_delayed_ack(sk);
-		return;
+		if (sock_net(sk)->ipv4.sysctl_tcp_delayed_acks) {
+			tcp_send_delayed_ack(sk);
+			return;
+		}
+		/* Delayed acks disabled */
+		goto send_now;
 	}
 
 	if (!tcp_is_sack(tp) ||
@@ -6655,7 +6667,7 @@ int tcp_rcv_state_process(struct sock *sk, struct sk_buff *skb)
 		if (tp->rx_opt.tstamp_ok)
 			tp->advmss -= TCPOLEN_TSTAMP_ALIGNED;
 
-		if (!inet_csk(sk)->icsk_ca_ops->cong_control)
+		if (!inet_csk(sk)->icsk_ca_ops->cong_control && !tp->disable_kernel_pacing_calculation)
 			tcp_update_pacing_rate(sk);
 
 		/* Prevent spurious tcp_cwnd_restart() on first data packet */
