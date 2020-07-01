@@ -33,59 +33,43 @@
 #define PC_LOG 0
 #define LOG_PRINT(x) do { if (PC_LOG) printk x; if (PC_DEBUG) trace_printk x;} while (0)
 
-/* Memory cache */
-#define MEMORY_CACHE_SIZE_CHIRPS 10U
-#define MEMORY_CACHE_SIZE_BYTES (sizeof(struct cc_chirp) * MEMORY_CACHE_SIZE_CHIRPS)
-#define MEM_UNALLOC 0x01
-#define MEM_CACHE 0x02
-#define MEM_ALLOC 0x04
-#define MEM_LAST 0x10
-
 struct cc_chirp {
-	u16 chirp_number; /* Chirp number, first chirp has number 0 */
-	u16 N;            /* The number of packets/segments in this chirp */
-	u16 qdelay_index; /* Used to record the measured queue delays */
-	u16 ack_cnt;      /* The number of acks received. ack_cnt <= N*/
-
-	u32 qdelay[CHIRP_SIZE];              /* Queue delay experienced by each of the packets*/
-	u64 scheduled_gaps[CHIRP_SIZE];      /* Inter send times recorded by the kernel.
-					      * Index 0 is (I think) unused. */
-	u64 inter_arrival_times[CHIRP_SIZE]; /* Inter-arrival times of the acks. The first entry, index 0,
-					      * is unusable/invalid. */
-
-	/* These can be placed somewhere else because they are used for at most one chirp at a time */
-	char uncounted;
-	char in_excursion;
-	u32 excursion_start;
-	char excursion_len;
-	u32 max_q;
-
-	u32 last_delay;
+	/* Need to be this big */
 	u64 last_gap;
-	u32 last_sample;
-
 	u64 gap_total;
 	u64 gap_pending;
-	char pending_count;
+	
+	u32     chirp_number : 16, /* Chirp number, first chirp has number 0 */
+		qdelay_index : 16; /* Used to record the measured queue delays */
 
-	char valid;
-};
+	u32     uncounted     : 6,
+		in_excursion  : 1,
+		valid         : 1,
+		excursion_len : 8,
+		ack_cnt       : 8,
+		pending_count : 8;
+	
+	u32 excursion_start;      /* Need to be this big */
+	u32 max_q;                /* Need to be this big */
+	u32 last_delay;
+	u32 last_sample;
+	
+}__attribute__((packed));
 
 struct paced_chirping {
-	u8 pc_state;
-	struct cc_chirp *chirp_list;
-
 	u32 gap_avg_ns;      /* Average gap (estimate). Chirps are sent out with a average gap of this value. */
 	u32 round_length_us; /* Used for termination condition. It is an approximate calculation of how much
 			      * time all the chirps in the current round take up */
-	u32 chirp_number;    /* The next chirp number */
 	u32 M;               /* Maximum number of chirps in current round */
 	u32 round_start;     /* Chirp number of the first chirp in the round*/
 	u32 round_sent;      /* Number of chirps sent in the round */
-	u16 gain;            /* How much M is increased in-between rounds. M *= gain */
-	u16 geometry;        /* Controls the range of the gaps within each chirp  */
-	struct cc_chirp *cur_chirp;
-};
+	u32     chirp_number : 16,
+		pc_state     : 8,
+		unused       : 8;            /* How much M is increased in-between rounds. M *= gain */
+	u32     geometry     : 16,
+		gain         : 16;        /* Controls the range of the gaps within each chirp  */
+	struct cc_chirp cur_chirp;
+}__attribute__((packed));
 
 
 #if IS_ENABLED(CONFIG_PACED_CHIRPING)

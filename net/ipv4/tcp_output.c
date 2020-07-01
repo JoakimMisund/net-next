@@ -1111,7 +1111,6 @@ static void tcp_update_skb_after_send(struct sock *sk, struct sk_buff *skb,
 #if IS_ENABLED(CONFIG_PACED_CHIRPING)
 		if (tp->is_chirping) {
 			if (tp->chirp.packets > tp->chirp.packets_out) {
-
 				struct paced_chirping_ext *pc_ext = skb_ext_add(skb, SKB_EXT_PACED_CHIRPING);
 				struct chirp *chirp = &tp->chirp;
 				u64 len_ns = chirp->gap_ns;
