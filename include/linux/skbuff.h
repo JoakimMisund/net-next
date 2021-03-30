@@ -519,6 +519,8 @@ struct skb_shared_info {
 	struct skb_shared_hwtstamps hwtstamps;
 	unsigned int	gso_type;
 	u32		tskey;
+	u8		pacing_location;
+	u64		pacing_timestamp;
 
 	/*
 	 * Warning : all fields before dataref are cleared in __alloc_skb()

@@ -28,6 +28,7 @@
 #include <linux/module.h>
 #include <linux/math64.h>
 #include <net/tcp.h>
+#include "paced_chirping.h"
 
 #define BICTCP_BETA_SCALE    1024	/* Scale factor beta calculation
 					 * max_cwnd = snd_cwnd * beta
@@ -100,6 +101,7 @@ struct bictcp {
 	u32	end_seq;	/* end_seq of the round */
 	u32	last_ack;	/* last time when the ACK spacing is close */
 	u32	curr_rtt;	/* the minimum rtt of current round */
+	struct paced_chirping *pc;
 };
 
 static inline void bictcp_reset(struct bictcp *ca)
@@ -139,11 +141,21 @@ static void bictcp_init(struct sock *sk)
 
 	bictcp_reset(ca);
 
+	if (paced_chirping_enabled) {
+		ca->pc = paced_chirping_init(sk, NULL);
+		if (ca->pc)
+			hystart = 0; /* Forcefully disable hystart*/
+	} else { /* Probably memset to 0 already */
+		ca->pc = NULL;
+	}
+
 	if (hystart)
 		bictcp_hystart_reset(sk);
 
 	if (!hystart && initial_ssthresh)
 		tcp_sk(sk)->snd_ssthresh = initial_ssthresh;
+
+
 }
 
 static void bictcp_cwnd_event(struct sock *sk, enum tcp_ca_event event)
@@ -333,6 +345,9 @@ static void bictcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct bictcp *ca = inet_csk_ca(sk);
 
+	if (paced_chirping_enabled && paced_chirping_active(ca->pc))
+		return;
+
 	if (!tcp_is_cwnd_limited(sk))
 		return;
 
@@ -366,7 +381,11 @@ static u32 bictcp_recalc_ssthresh(struct sock *sk)
 
 static void bictcp_state(struct sock *sk, u8 new_state)
 {
+	struct bictcp *ca = inet_csk_ca(sk);
 	if (new_state == TCP_CA_Loss) {
+		if (unlikely(paced_chirping_enabled && paced_chirping_active(ca->pc))) {
+			paced_chirping_exit(sk, ca->pc, PC_EXIT_LOSS);
+		}
 		bictcp_reset(inet_csk_ca(sk));
 		bictcp_hystart_reset(sk);
 	}
@@ -480,14 +499,41 @@ static void bictcp_acked(struct sock *sk, const struct ack_sample *sample)
 		hystart_update(sk, delay);
 }
 
+/* Paced Chirping new functions */
+static u32 bictcp_new_chirp(struct sock *sk)
+{
+	struct bictcp *ca = inet_csk_ca(sk);
+	return paced_chirping_new_chirp(sk, ca->pc);
+}
+
+static void bictcp_release(struct sock *sk)
+{
+	struct bictcp *ca = inet_csk_ca(sk);
+	if (paced_chirping_enabled && ca->pc) {
+		paced_chirping_release(sk, ca->pc);
+		ca->pc = NULL;
+	}
+}
+static void bictcp_pkt_acked(struct sock *sk, struct sk_buff *skb)
+{
+	struct bictcp *ca = inet_csk_ca(sk);
+	if (paced_chirping_enabled && paced_chirping_active(ca->pc)) {
+		paced_chirping_pkt_acked(sk, ca->pc, skb);
+	}
+}
+
+
 static struct tcp_congestion_ops cubictcp __read_mostly = {
 	.init		= bictcp_init,
+	.release	= bictcp_release,
 	.ssthresh	= bictcp_recalc_ssthresh,
 	.cong_avoid	= bictcp_cong_avoid,
 	.set_state	= bictcp_state,
 	.undo_cwnd	= tcp_reno_undo_cwnd,
 	.cwnd_event	= bictcp_cwnd_event,
 	.pkts_acked     = bictcp_acked,
+	.new_chirp      = bictcp_new_chirp,
+	.pkt_acked      = bictcp_pkt_acked,
 	.owner		= THIS_MODULE,
 	.name		= "cubic",
 };

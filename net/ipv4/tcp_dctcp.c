@@ -41,6 +41,7 @@
 #include <net/tcp.h>
 #include <linux/inet_diag.h>
 #include "tcp_dctcp.h"
+#include "paced_chirping.h"
 
 #define DCTCP_MAX_ALPHA	1024U
 
@@ -52,6 +53,8 @@ struct dctcp {
 	u32 next_seq;
 	u32 ce_state;
 	u32 loss_cwnd;
+
+	struct paced_chirping *pc;
 };
 
 static unsigned int dctcp_shift_g __read_mostly = 4; /* g = 1/2^4 */
@@ -87,6 +90,9 @@ static void dctcp_init(struct sock *sk)
 
 		ca->loss_cwnd = 0;
 		ca->ce_state = 0;
+
+		if (paced_chirping_enabled)
+			ca->pc = paced_chirping_init(sk, NULL);
 
 		dctcp_reset(tp, ca);
 		return;
@@ -170,7 +176,10 @@ static void dctcp_cwnd_event(struct sock *sk, enum tcp_ca_event ev)
 		dctcp_ece_ack_update(sk, ev, &ca->prior_rcv_nxt, &ca->ce_state);
 		break;
 	case CA_EVENT_LOSS:
-		dctcp_react_to_loss(sk);
+		if (paced_chirping_enabled && paced_chirping_active(ca->pc))
+			paced_chirping_exit(sk, ca->pc, PC_EXIT_LOSS);
+		else
+			dctcp_react_to_loss(sk);
 		break;
 	default:
 		/* Don't care for the rest. */
@@ -213,17 +222,69 @@ static u32 dctcp_cwnd_undo(struct sock *sk)
 	return max(tcp_sk(sk)->snd_cwnd, ca->loss_cwnd);
 }
 
+static void dctcp_release(struct sock *sk)
+{
+	struct dctcp *ca = inet_csk_ca(sk);
+	tcp_sk(sk)->ecn_flags &= ~TCP_ECN_ECT_1;
+	if (paced_chirping_enabled && ca->pc) {
+		paced_chirping_release(sk, ca->pc);
+		ca->pc = NULL;
+	}
+}
+
+static void dctcp_cong_avoid(struct sock *sk, u32 ack, u32 acked)
+{
+	struct dctcp *ca = inet_csk_ca(sk);
+	if (paced_chirping_enabled && paced_chirping_active(ca->pc))
+	{
+		return;
+	}
+	tcp_reno_cong_avoid(sk, ack, acked);
+}
+
+/* Not strictly needed.. */
+static void dctcp_acked(struct sock *sk, const struct ack_sample *sample)
+{
+	struct dctcp *ca = inet_csk_ca(sk);
+	struct rate_sample rs;
+	rs.rtt_us = sample->rtt_us;
+	rs.acked_sacked = sample->pkts_acked;
+	if (paced_chirping_enabled && paced_chirping_active(ca->pc)) {
+		paced_chirping_update(sk, ca->pc, &rs);
+	}
+}
+
+static u32 dctcp_new_chirp (struct sock *sk)
+{
+	struct dctcp *ca = inet_csk_ca(sk);
+	return paced_chirping_new_chirp(sk, ca->pc);
+}
+
+static void dctcp_ack_acked(struct sock *sk, struct sk_buff *skb)
+{
+	struct dctcp *ca = inet_csk_ca(sk);
+	if (paced_chirping_enabled && paced_chirping_active(ca->pc)) {
+		paced_chirping_pkt_acked(sk, ca->pc, skb);
+	}
+}
+
 static struct tcp_congestion_ops dctcp __read_mostly = {
 	.init		= dctcp_init,
+	.release	= dctcp_release,
 	.in_ack_event   = dctcp_update_alpha,
 	.cwnd_event	= dctcp_cwnd_event,
 	.ssthresh	= dctcp_ssthresh,
-	.cong_avoid	= tcp_reno_cong_avoid,
 	.undo_cwnd	= dctcp_cwnd_undo,
 	.set_state	= dctcp_state,
 	.get_info	= dctcp_get_info,
 	.flags		= TCP_CONG_NEEDS_ECN,
 	.owner		= THIS_MODULE,
+	/*For paced chirping */
+	.cong_avoid     = dctcp_cong_avoid,
+	.pkts_acked     = dctcp_acked,
+	.new_chirp      = dctcp_new_chirp,
+	.pkt_acked      = dctcp_ack_acked,
+	
 	.name		= "dctcp",
 };
 

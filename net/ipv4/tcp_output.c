@@ -1251,39 +1251,41 @@ static void tcp_update_skb_after_send(struct sock *sk, struct sk_buff *skb,
 		if (tp->is_chirping) {
 			if (tp->chirp.packets > tp->chirp.packets_out) {
 				struct paced_chirping_ext *pc_ext = skb_ext_add(skb, SKB_EXT_PACED_CHIRPING);
+				struct skb_shared_info* info = skb_shinfo(skb);
 				struct chirp *chirp = &tp->chirp;
 				u64 len_ns = chirp->gap_ns;
-				u64 credit = tp->tcp_wstamp_ns - prior_wstamp;
 
-				chirp->gap_ns = (chirp->gap_step_ns > chirp->gap_ns) ?
-					0 : chirp->gap_ns - chirp->gap_step_ns;
+				chirp->gap_ns = (chirp->gap_step_ns > chirp->gap_ns) ? 0 : chirp->gap_ns - chirp->gap_step_ns;
 				chirp->packets_out++;
-				/* take into account OS jitter */
-				len_ns -= min_t(u64, len_ns / 2, credit);
 
 				if (chirp->packets_out == 1U) {
 					chirp->begin_seq = tp->snd_nxt;
-					credit = 0;
 				}
 
 				if (pc_ext) {
 					pc_ext->chirp_number = chirp->chirp_number;
 					pc_ext->packets = chirp->packets;
-					pc_ext->scheduled_gap = credit + len_ns;
+					pc_ext->scheduled_gap = len_ns;
+				}
+				if (info) {
+					info->pacing_location  = INTERAL_PACING;
+					info->pacing_timestamp = ktime_get_ns();
 				}
 
 				if (chirp->packets_out == chirp->packets) {
-					tp->tcp_wstamp_ns += chirp->guard_interval_ns; /*Don't care about credits here*/
+					tp->tcp_wstamp_ns += chirp->guard_interval_ns;
+					
 					if (pc_ext)
 						pc_ext->scheduled_gap = chirp->guard_interval_ns;
 					
 					chirp->end_seq = tp->snd_nxt + skb->len;
-					inet_csk(sk)->icsk_ca_ops->new_chirp(sk);
+					if (inet_csk(sk)->icsk_ca_ops->new_chirp)
+						inet_csk(sk)->icsk_ca_ops->new_chirp(sk);
 				} else {
 					tp->tcp_wstamp_ns += len_ns;
 
 					if (chirp->scheduled_gaps)
-						chirp->scheduled_gaps[chirp->packets_out] = credit + len_ns;
+						chirp->scheduled_gaps[chirp->packets_out] = len_ns;
 				}
 			}
 		}
@@ -2730,7 +2732,8 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 #if IS_ENABLED(CONFIG_PACED_CHIRPING)
 		if (tp->is_chirping &&
 		    tp->chirp.packets <= tp->chirp.packets_out &&
-		    inet_csk(sk)->icsk_ca_ops->new_chirp(sk)) {
+		    (!inet_csk(sk)->icsk_ca_ops->new_chirp ||
+		     inet_csk(sk)->icsk_ca_ops->new_chirp(sk))) {
 			break;
 		}
 #endif
@@ -2774,11 +2777,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		}
 
 		limit = mss_now;
-		if (
-#if IS_ENABLED(CONFIG_PACED_CHIRPING)
-			!tp->is_chirping &&
-#endif
-			tso_segs > 1 && !tcp_urg_mode(tp))
+		if (tso_segs > 1 && !tcp_urg_mode(tp))
 			limit = tcp_mss_split_point(sk, skb, mss_now,
 						    min_t(unsigned int,
 							  cwnd_quota,

@@ -5,11 +5,26 @@
 #include <linux/tcp.h>
 #include <linux/types.h>
 
+enum {
+	UNUSED,
+	INTERAL_PACING,
+	FQ_PACING
+};
+
 struct paced_chirping_ext {
-	u64 scheduled_gap;
 	u16 chirp_number;
 	u8 packets;
+
+	u64 scheduled_gap;
 };
+
+struct paced_chirping_cache {
+	u32 srtt;
+	u32 cwnd;
+	u32 reordering;
+};
+
+void paced_chirping_cache_get(struct sock *sk, struct paced_chirping_cache *pc_cache);
 
 #if IS_ENABLED(CONFIG_PACED_CHIRPING)
 

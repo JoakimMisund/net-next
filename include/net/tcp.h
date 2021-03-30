@@ -800,7 +800,9 @@ void tcp_send_window_probe(struct sock *sk);
  * It is no longer tied to jiffies, but to 1 ms clock.
  * Note: double check if you want to use tcp_jiffies32 instead of this.
  */
-#define TCP_TS_HZ	1000
+//#define TCP_TS_HZ	1000
+/* Make the timestamp microsecond instead */
+#define TCP_TS_HZ	1000000
 
 static inline u64 tcp_clock_ns(void)
 {
@@ -1580,6 +1582,10 @@ static inline bool tcp_paws_check(const struct tcp_options_received *rx_opt,
 		return true;
 	if (unlikely(!time_before32(ktime_get_seconds(),
 				    rx_opt->ts_recent_stamp + TCP_PAWS_24DAYS)))
+		return true;
+	/* Micro second granularity */
+	if (unlikely(!time_before32(ktime_get_seconds(),
+				    rx_opt->ts_recent_stamp + 2147)))
 		return true;
 	/*
 	 * Some OSes send SYN and SYNACK messages with tsval=0 tsecr=0,
