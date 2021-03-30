@@ -239,7 +239,7 @@ u32 paced_chirping_new_chirp(struct sock *sk, struct paced_chirping *pc)
 		return 0;
 	return paced_chirping_new_chirp_startup(sk, pc);	
 }
-// EXPORT_SYMBOL(paced_chirping_new_chirp);
+EXPORT_SYMBOL(paced_chirping_new_chirp);
 
 /********************************************************************************/
 
