@@ -11,10 +11,12 @@
 #include <linux/module.h>
 
 /* Debugging */
-#define PC_TRACE 1
-#define PC_LOG 1
-#define LOG_PRINT(x) do { if (PC_LOG) printk x; if (PC_TRACE) trace_printk x;} while (0)
-#define TRACE_PRINT(x) do { if (PC_TRACE) trace_printk x;} while (0)
+static unsigned int paced_chirping_trace __read_mostly = 1;
+static unsigned int paced_chirping_log __read_mostly = 1;
+module_param(paced_chirping_trace, uint, 0644);
+module_param(paced_chirping_log, uint, 0644);
+#define LOG_PRINT(x) do { if (paced_chirping_log) printk x; if (paced_chirping_trace) trace_printk x;} while (0)
+#define TRACE_PRINT(x) do { if (paced_chirping_trace) trace_printk x;} while (0)
 
 #define EWMA(average, estimate, shift) average = average - (average>>(shift)) + (estimate>>(shift))
 
@@ -32,10 +34,19 @@
 
 
 /* Initialization values */
-#define PC_INITIAL_GAP_PKTS_SHIFT                6U /* 2^6 = 64 pkts */
-#define PC_INITIAL_LOAD_GAP_PKTS_SHIFT           4U /* 2^4 = 16 pkts */
-#define PC_INITIAL_GAP_NS                   120000U /* ~ 100mbps */
-#define PC_INITIAL_LOAD_GAP_NS             2400000U /* ~ 5mbps */
+static unsigned int paced_chirping_use_initial_srrt       __read_mostly = 1U;
+static unsigned int paced_chirping_use_cached_information __read_mostly = 0U;
+static unsigned int paced_chirping_gap_pkts_shift         __read_mostly = 6U; /* 2^6 = 64 pkts */
+static unsigned int paced_chirping_load_gap_pkts_shift    __read_mostly = 4U; /* 2^4 = 16 pkts */
+static u32 paced_chirping_initial_gap_ns                  __read_mostly = 120000U;  /* ~ 100mbps */
+static u32 paced_chirping_initial_load_gap_ns             __read_mostly = 2400000U; /* ~ 5mbps */
+
+module_param(paced_chirping_use_cached_information, uint, 0644);
+module_param(paced_chirping_use_initial_srrt, uint, 0644);
+module_param(paced_chirping_gap_pkts_shift, uint, 0644);
+module_param(paced_chirping_load_gap_pkts_shift, uint, 0644);
+module_param(paced_chirping_initial_gap_ns, uint, 0644);
+module_param(paced_chirping_initial_load_gap_ns, uint, 0644);
 
 /* Shifts used to store upscaled values */
 #define PC_G_G_SHIFT                            10U /* Gain and geometry shift */
@@ -53,12 +64,16 @@
 #define PC_DISCONT_LINK_CHIRP_AVG_SUB_SHIFT      2U /* Set chirp avg to est - est/2^X */
 
 /* Provides some safety against misbehaviour */
-#define PC_SERVICE_TIME_QUEUE_THRESHOLD_US      10000U /* 10ms, use service time if persistent qdelay is greater */
-#define PC_OVERLOAD_QUEUE_THRESHOLD_US          30000U /* 30ms, exit if persistent queueing delay is greater */
+static u32 paced_chirping_service_time_queueing_delay_thresh_us __read_mostly  = 10000U; /* 10ms */
+static u32 paced_chirping_overload_exit_queueing_delay_thresh_us __read_mostly = 30000U; /* 30ms */
+static u32 paced_chirping_lowest_internal_pacing_gap __read_mostly = 40000U; /* 40us */
+static u32 paced_chirping_lowest_FQ_pacing_gap __read_mostly       = 20000U; /* 20us */
+module_param(paced_chirping_service_time_queueing_delay_thresh_us, uint, 0644);
+module_param(paced_chirping_overload_exit_queueing_delay_thresh_us, uint, 0644);
+module_param(paced_chirping_lowest_internal_pacing_gap, uint, 0644);
+module_param(paced_chirping_lowest_FQ_pacing_gap, uint, 0644);
 
-#define PC_LOWEST_SUPPORTED_GAP_AVERAGE_NS          40000U /* 40us */
-#define PC_INTERNAL_LOWEST_SUPPORTED_GAP_AVERAGE_NS 40000U /* 40us */
-#define PC_FQ_LOWEST_SUPPORTED_GAP_AVERAGE_NS       20000U /* 20us */
+
 
 
 struct cc_chirp {
@@ -163,9 +178,6 @@ static unsigned int paced_chirping_use_remote_tsval __read_mostly = 0U;
 module_param(paced_chirping_use_remote_tsval, uint, 0644);
 MODULE_PARM_DESC(paced_chirping_use_remote_tsval, "Whether to use remote tsval to calculate inter-arrival gaps (Default: 0)");
 
-static unsigned int paced_chirping_use_cached_information __read_mostly = 0U;
-module_param(paced_chirping_use_cached_information, uint, 0644);
-MODULE_PARM_DESC(paced_chirping_use_cached_information, "Whether to use cached srtt and cwnd to set the initial probing gap (Default: 0)");
 
 
 /* Guide for putting paced chirping support into your CC module.
@@ -222,7 +234,6 @@ MODULE_PARM_DESC(paced_chirping_use_cached_information, "Whether to use cached s
  * paced_chirping_exit should be called upon LOSS
  */
 
-/* TODO: remove tcp_sock as parameter */
 struct paced_chirping* paced_chirping_init(struct sock *sk, struct paced_chirping *pc);
 u32  paced_chirping_new_chirp(struct sock *sk, struct paced_chirping *pc);
 void paced_chirping_update(struct sock *sk, struct paced_chirping *pc, const struct rate_sample *rs);

@@ -213,7 +213,7 @@ static u32 paced_chirping_is_discontinuous_link(struct paced_chirping *pc)
 u32 paced_chirping_new_chirp_startup(struct sock *sk, struct paced_chirping *pc)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
-	u32 avg_gap_of_chirp = min(pc->gap_avg_ns, pc->gap_avg_load_ns);
+	u32 avg_gap_of_chirp = min_t(u64, pc->gap_avg_ns, pc->gap_avg_load_ns);
 	u32 N = pc->N;
 
 	if (pc->next_chirp_number <= PC_INITIAL_CHIRP_NUMBER+1)
@@ -560,12 +560,12 @@ static u32 paced_chirping_get_best_persistent_service_time_estimate(struct tcp_s
 {
 	u32 reactive_service_time_ns = paced_chirping_get_reactive_service_time(tp);
 	u32 reactive_recv_gap_estimate_ns = pc->recv_gap_estimate_ns;
-	return min(reactive_service_time_ns, reactive_recv_gap_estimate_ns);
+	return min_t(u32, reactive_service_time_ns, reactive_recv_gap_estimate_ns);
 }
 static u32 paced_chirping_should_use_persistent_service_time(struct tcp_sock *tp, struct paced_chirping *pc, struct cc_chirp *c)
 {
 	u32 qdelay_us = paced_chirping_get_persistent_queueing_delay_us(tp, pc);
-	if (qdelay_us > PC_SERVICE_TIME_QUEUE_THRESHOLD_US) {
+	if (qdelay_us > paced_chirping_service_time_queueing_delay_thresh_us) {
 		return 1;
 	}
 	return 0;
@@ -573,7 +573,7 @@ static u32 paced_chirping_should_use_persistent_service_time(struct tcp_sock *tp
 static u32 paced_chirping_should_exit_overload(struct tcp_sock *tp, struct paced_chirping *pc, struct cc_chirp *c)
 {
 	u32 qdelay_us = paced_chirping_get_persistent_queueing_delay_us(tp, pc);
-	if (qdelay_us >= PC_OVERLOAD_QUEUE_THRESHOLD_US) {
+	if (qdelay_us >= paced_chirping_overload_exit_queueing_delay_thresh_us) {
 		return 1;
 	}
 	return 0;
@@ -609,7 +609,7 @@ void update_chirp_size(struct paced_chirping *pc, struct cc_chirp *c)
 	u32 min_size = PC_CHIRP_SIZE_MIN;
 	u32 max_size = PC_CHIRP_SIZE_MAX;
 	/* TODO: Make sure 1 or 2 chirps of this size can fit in one RTT. Also apply upper restriction */
-	pc->N = min(max_size, max(min_size, (u32)cover_aggregates));
+	pc->N = min_t(u32, max_size, max_t(u32, min_size, cover_aggregates));
 }
 
 void update_chirp_geometry(struct paced_chirping *pc, struct cc_chirp *c)
@@ -620,13 +620,13 @@ void update_chirp_geometry(struct paced_chirping *pc, struct cc_chirp *c)
 
 	u64 load_shifted = pc->gap_avg_load_ns<<PC_G_G_SHIFT;
 	do_div(load_shifted, pc->gap_avg_ns+1);
-	pc->geometry = min(max((u32)load_shifted, 1U << PC_G_G_SHIFT), 2U << PC_G_G_SHIFT);
+	pc->geometry = min_t(u32, max_t(u32, load_shifted, 1U << PC_G_G_SHIFT), 2U << PC_G_G_SHIFT);
 }
 static inline void update_load_window(struct tcp_sock *tp, struct paced_chirping *pc)
 {
 	u64 window = paced_chirping_get_smoothed_rtt_us(tp, pc) * 1000;
 	do_div(window, max(1U, pc->gap_avg_load_ns));
-	pc->load_window = min((u32)window, tp->snd_cwnd_clamp);
+	pc->load_window = min_t(u32, window, tp->snd_cwnd_clamp);
 }
 static u32 get_per_chirp_ewma_shift(struct tcp_sock *tp, u32 chirp_size)
 {
@@ -712,10 +712,10 @@ static void paced_chirping_pkt_acked_startup(struct sock *sk, struct paced_chirp
 		}
 
 		if ((!pc->send_timestamp_location || pc->send_timestamp_location == INTERAL_PACING)
-		    && pc->gap_avg_load_ns < PC_INTERNAL_LOWEST_SUPPORTED_GAP_AVERAGE_NS) {
+		    && pc->gap_avg_load_ns < paced_chirping_lowest_internal_pacing_gap) {
 			paced_chirping_exit(sk, pc, PC_EXIT_SYSTEM_LIMITATION);
 		} else if (pc->send_timestamp_location == FQ_PACING &&
-			   pc->gap_avg_load_ns < PC_FQ_LOWEST_SUPPORTED_GAP_AVERAGE_NS) {
+			   pc->gap_avg_load_ns < paced_chirping_lowest_FQ_pacing_gap) {
 			paced_chirping_exit(sk, pc, PC_EXIT_SYSTEM_LIMITATION);
 		}
 
@@ -847,12 +847,12 @@ static inline void paced_chirping_set_initial_gap_avg(struct sock *sk, struct tc
 {
 	struct paced_chirping_cache cache;
 	
-	if (tp->srtt_us>>3) {
-		pc->gap_avg_ns = 1000*((tp->srtt_us>>3)>>PC_INITIAL_GAP_PKTS_SHIFT);
-		pc->gap_avg_load_ns = 1000*((tp->srtt_us>>3)>>PC_INITIAL_LOAD_GAP_PKTS_SHIFT);
+	if (paced_chirping_use_initial_srrt && tp->srtt_us>>3) {
+		pc->gap_avg_ns = 1000*((tp->srtt_us>>3)>>paced_chirping_gap_pkts_shift);
+		pc->gap_avg_load_ns = 1000*((tp->srtt_us>>3)>>paced_chirping_load_gap_pkts_shift);
 	} else {
-		pc->gap_avg_ns = PC_INITIAL_GAP_NS;
-		pc->gap_avg_load_ns = PC_INITIAL_LOAD_GAP_NS;
+		pc->gap_avg_ns = paced_chirping_initial_gap_ns;
+		pc->gap_avg_load_ns = paced_chirping_initial_load_gap_ns;
 	}
 
 	if (paced_chirping_use_cached_information) {
@@ -862,7 +862,7 @@ static inline void paced_chirping_set_initial_gap_avg(struct sock *sk, struct tc
 		}
 	}
 
-	pc->gap_avg_ns = min(pc->gap_avg_ns, paced_chirping_maximum_initial_gap);
+	pc->gap_avg_ns = min_t(u32, pc->gap_avg_ns, paced_chirping_maximum_initial_gap);
 }
 void paced_chirping_init_both(struct sock *sk, struct tcp_sock *tp,
 			      struct paced_chirping *pc)
@@ -877,7 +877,7 @@ void paced_chirping_init_both(struct sock *sk, struct tcp_sock *tp,
 	tp->is_chirping = 1;
 
 	/* Initial algorithm variables */
-	pc->geometry = min(max(paced_chirping_initial_geometry, 1U << PC_G_G_SHIFT), 2U << PC_G_G_SHIFT);
+	pc->geometry = min_t(u32, max_t(u32, paced_chirping_initial_geometry, 1U << PC_G_G_SHIFT), 2U << PC_G_G_SHIFT);
 	pc->next_chirp_number = PC_INITIAL_CHIRP_NUMBER;
 	pc->N = paced_chirping_prob_size;
 	paced_chirping_reset_chirp(get_chirp_struct(pc));
