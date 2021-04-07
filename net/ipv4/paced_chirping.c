@@ -662,6 +662,7 @@ static void paced_chirping_pkt_acked_startup(struct sock *sk, struct paced_chirp
 	struct cc_chirp *c;
 	u32 ewma_shift;
 	u32 estimate;
+	u32 proactive_service_rate;
 
 	pc_ext = skb_ext_find(skb, SKB_EXT_PACED_CHIRPING);
 	if (!pc_ext) { /* Acked packet that is not part of a chirp */
@@ -685,17 +686,17 @@ static void paced_chirping_pkt_acked_startup(struct sock *sk, struct paced_chirp
 	
 	estimate = paced_chirping_run_analysis(sk, pc, c, skb);
 	if (estimate) { /* New estimate is available */
-
-		if (estimate == UINT_MAX) { /* TODO: Think about this.. */
-			estimate = pc->gap_avg_ns;
-		}
-
 		if (paced_chirping_should_use_persistent_service_time(tp, pc, c)) {
 			estimate = paced_chirping_get_best_persistent_service_time_estimate(tp, pc, c);
 		}
 
-		if (c->rate_delivered > (c->packets_acked>>1)) {
-			estimate = (paced_chirping_get_proactive_service_time(tp, c)>>1) + (estimate>>1);
+		if (estimate == UINT_MAX || estimate > 100000000U) { /* TODO: Think about this.. */
+			estimate = pc->gap_avg_ns;
+		}
+
+		proactive_service_rate = paced_chirping_get_proactive_service_time(tp, c);
+		if (c->rate_delivered > (c->packets_acked>>1) && proactive_service_rate != UINT_MAX) {
+			estimate = (proactive_service_rate>>1) + (estimate>>1);
 		}
 
 		ewma_shift = get_per_chirp_ewma_shift(tp, c->packets_acked + 1);
@@ -729,7 +730,7 @@ static void paced_chirping_pkt_acked_startup(struct sock *sk, struct paced_chirp
 			     ntohs(sk->sk_dport),
 
 			     estimate,
-			     paced_chirping_get_proactive_service_time(tp, c),
+			     proactive_service_rate,
 			     paced_chirping_get_best_persistent_service_time_estimate(tp, pc, c),
 			     ewma_shift,
 			     c->chirp_number,
