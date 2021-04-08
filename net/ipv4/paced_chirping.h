@@ -75,6 +75,11 @@ module_param(paced_chirping_lowest_FQ_pacing_gap, uint, 0644);
 
 
 
+/* This is too fragile as is. */
+static u32 paced_chirping_use_proactive_service_time __read_mostly  = 0;
+module_param(paced_chirping_use_proactive_service_time, uint, 0644);
+
+
 
 struct cc_chirp {
 	/* Original analysis converted to on-line by Illpo */
