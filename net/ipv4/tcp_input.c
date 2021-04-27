@@ -2766,7 +2766,8 @@ void tcp_cwnd_reduction(struct sock *sk, int newly_acked_sacked, int flag)
 			       max_t(int, tp->prr_delivered - tp->prr_out,
 				     newly_acked_sacked) + 1);
 	} else {
-		sndcnt = min(delta, newly_acked_sacked);
+		/* BUGFIX: Not added to mainline yet? */
+		sndcnt = min_t(int, delta, tp->prr_delivered - tp->prr_out);
 	}
 	/* Force a fast retransmit upon entering fast recovery */
 	sndcnt = max(sndcnt, (tp->prr_out ? 0 : 1));
@@ -4011,7 +4012,7 @@ static int tcp_ack(struct sock *sk, const struct sk_buff *skb, int flag)
 		ecn_count = tcp_accecn_process(tp, skb,
 					       tp->delivered - delivered,
 					       sack_state.delivered_bytes, flag);
-		if (ecn_count > 0)
+		if (ecn_count > 0 && likely(!tp->disable_cwr_upon_ece))
 			flag |= FLAG_ECE;
 	}
 
@@ -4052,7 +4053,7 @@ no_queue:
 		ecn_count = tcp_accecn_process(tp, skb,
 					       tp->delivered - delivered,
 					       sack_state.delivered_bytes, flag);
-		if (ecn_count > 0)
+		if (ecn_count > 0 && likely(!tp->disable_cwr_upon_ece))
 			flag |= FLAG_ECE;
 	}
 	tcp_in_ack_event(sk, flag);

@@ -367,6 +367,9 @@ static u32 bictcp_recalc_ssthresh(struct sock *sk)
 	const struct tcp_sock *tp = tcp_sk(sk);
 	struct bictcp *ca = inet_csk_ca(sk);
 
+	if (paced_chirping_enabled && paced_chirping_active(ca->pc))
+		return tp->snd_cwnd;
+
 	ca->epoch_start = 0;	/* end of epoch */
 
 	/* Wmax and fast convergence */

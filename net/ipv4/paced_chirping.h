@@ -64,21 +64,21 @@ module_param(paced_chirping_initial_load_gap_ns, uint, 0644);
 #define PC_DISCONT_LINK_CHIRP_AVG_SUB_SHIFT      2U /* Set chirp avg to est - est/2^X */
 
 /* Provides some safety against misbehaviour */
-static u32 paced_chirping_service_time_queueing_delay_thresh_us __read_mostly  = 10000U; /* 10ms */
+static u32 paced_chirping_service_time_queueing_delay_thresh_us __read_mostly  =  5000U; /* 5ms */
+static u32 paced_chirping_service_time_queueing_delay_percent   __read_mostly  =   205U; /* 20% */
 static u32 paced_chirping_overload_exit_queueing_delay_thresh_us __read_mostly = 30000U; /* 30ms */
 static u32 paced_chirping_lowest_internal_pacing_gap __read_mostly = 40000U; /* 40us */
 static u32 paced_chirping_lowest_FQ_pacing_gap __read_mostly       = 20000U; /* 20us */
 module_param(paced_chirping_service_time_queueing_delay_thresh_us, uint, 0644);
+module_param(paced_chirping_service_time_queueing_delay_percent, uint, 0644);
 module_param(paced_chirping_overload_exit_queueing_delay_thresh_us, uint, 0644);
 module_param(paced_chirping_lowest_internal_pacing_gap, uint, 0644);
 module_param(paced_chirping_lowest_FQ_pacing_gap, uint, 0644);
 
 
-
 /* This is too fragile as is. */
 static u32 paced_chirping_use_proactive_service_time __read_mostly  = 0;
 module_param(paced_chirping_use_proactive_service_time, uint, 0644);
-
 
 
 struct cc_chirp {
@@ -101,6 +101,9 @@ struct cc_chirp {
 	u16     max_q;                /* Need to be this big */
 	u32     last_delay;
 	u32     last_sample;
+
+	/* Detecting persistent queueing delay */
+	u32     min_queueing_delay_us;
 
 	/* Same interpretation as tp members, but
 	 * only over part of a chirp with persistent queueing delay. */
@@ -128,6 +131,9 @@ struct paced_chirping {
 	
 	u64     recv_gap_estimate_ns; /* EWMA over recv gaps */
 	s64     recv_gap_ad; /* Trend of recv_gap_estimate_ns */
+
+	u32     queueing_delay_average_us;
+	u32     queueing_delay_mad_us;
 
 	/* Keeping load */
 	u32     gap_avg_load_ns; /* Gap used to enforce a certain average load */

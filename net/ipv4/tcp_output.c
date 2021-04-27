@@ -2060,6 +2060,13 @@ static u32 tcp_tso_segs(struct sock *sk, unsigned int mss_now)
 	tso_segs = tcp_tso_autosize(sk, mss_now, min_tso);
 	if (ca_ops->max_gso_segs)
 		tso_segs = min_t(u32, tso_segs, ca_ops->max_gso_segs(sk));
+/*
+Currently misusing sk_gso_max_segs to forcibly disable TSO
+#if IS_ENABLED(CONFIG_PACED_CHIRPING)
+	if (unlikely(tp->is_chirping))
+		tso_segs = 1;
+#endif
+*/
 	return min_t(u32, tso_segs, sk->sk_gso_max_segs);
 }
 
