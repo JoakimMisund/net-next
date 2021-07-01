@@ -534,7 +534,8 @@ u32 paced_chirping_run_analysis(struct sock *sk, struct paced_chirping *pc, stru
 
 			qdelay_diff = max(c->last_delay, c->excursion_start) - c->excursion_start;
 
-			if (qdelay_diff >= ((c->max_q>>1) + (c->max_q>>3))) {
+			if (qdelay_diff >= (c->max_q - (c->max_q>>1) + (c->max_q>>3)) && /* (c->max_q>>1) + (c->max_q>>3) */
+				c->last_delay > c->excursion_start) {
 				c->max_q = c->max_q > qdelay_diff ? c->max_q:qdelay_diff;
 				c->excursion_len++;
 
