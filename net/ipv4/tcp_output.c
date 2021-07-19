@@ -1654,7 +1654,7 @@ static int __tcp_transmit_skb(struct sock *sk, struct sk_buff *skb,
 				 inet6_csk_xmit, ip_queue_xmit,
 				 sk, skb, &inet->cork.fl);
 
-	if (unlikely(err > 0)) {
+	if (unlikely(err > 0) && !tp->is_chirping) {
 		tcp_enter_cwr(sk);
 		err = net_xmit_eval(err);
 	}
@@ -2147,7 +2147,8 @@ static void tcp_cwnd_validate(struct sock *sk, bool is_cwnd_limited)
 
 		if (sock_net(sk)->ipv4.sysctl_tcp_slow_start_after_idle &&
 		    (s32)(tcp_jiffies32 - tp->snd_cwnd_stamp) >= inet_csk(sk)->icsk_rto &&
-		    !ca_ops->cong_control)
+		    !ca_ops->cong_control &&
+		    !tp->is_chirping)
 			tcp_cwnd_application_limited(sk);
 
 		/* The following conditions together indicate the starvation
@@ -2605,7 +2606,8 @@ static int tcp_mtu_probe(struct sock *sk)
 		   icsk->icsk_mtup.probe_size ||
 		   inet_csk(sk)->icsk_ca_state != TCP_CA_Open ||
 		   tp->snd_cwnd < 11 ||
-		   tp->rx_opt.num_sacks || tp->rx_opt.dsack))
+		   tp->rx_opt.num_sacks || tp->rx_opt.dsack ||
+		   tp->is_chirping))
 		return -1;
 
 	/* Use binary search for probe_size between tcp_mss_base,
@@ -2722,6 +2724,19 @@ static int tcp_mtu_probe(struct sock *sk)
 	}
 
 	return -1;
+}
+
+static void tcp_arm_pacing_timer(struct sock *sk)
+{
+	struct tcp_sock *tp = tcp_sk(sk);
+
+	if (tp->tcp_wstamp_ns > tp->tcp_clock_cache &&
+	    !hrtimer_is_queued(&tp->pacing_timer)) {
+		hrtimer_start(&tp->pacing_timer,
+			      ns_to_ktime(tp->tcp_wstamp_ns),
+			      HRTIMER_MODE_ABS_PINNED_SOFT);
+		sock_hold(sk);
+	}
 }
 
 static bool tcp_pacing_check(struct sock *sk)
@@ -2902,6 +2917,7 @@ static bool tcp_write_xmit(struct sock *sk, unsigned int mss_now, int nonagle,
 		    tp->chirp.packets <= tp->chirp.packets_out &&
 		    (!inet_csk(sk)->icsk_ca_ops->new_chirp ||
 		     inet_csk(sk)->icsk_ca_ops->new_chirp(sk))) {
+			tcp_arm_pacing_timer(sk);
 			break;
 		}
 #endif
