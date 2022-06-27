@@ -421,7 +421,7 @@ void tcp_init_sock(struct sock *sk)
 #if IS_ENABLED(CONFIG_PACED_CHIRPING)
 	tp->chirp.packets = tp->chirp.packets_out = 0;
 	tp->is_chirping = 0;
-	tp->chirp.scheduled_gaps = NULL;
+	//tp->chirp.scheduled_gaps = NULL;
 #endif
 	tp->disable_kernel_pacing_calculation = 0;
 	tp->disable_cwr_upon_ece = 0;

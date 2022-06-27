@@ -3538,8 +3538,14 @@ static int tcp_clean_rtx_queue(struct sock *sk, u32 prior_fack,
 			tp->retrans_stamp = 0;
 		}
 
-		if (!fully_acked)
+		if (!fully_acked) {
+#if IS_ENABLED(CONFIG_PACED_CHIRPING)
+			struct paced_chirping_ext *pc_ext = skb_ext_find(skb, SKB_EXT_PACED_CHIRPING);
+			if (pc_ext && !pc_ext->first_ack_timestamp)
+				pc_ext->first_ack_timestamp = tp->tcp_mstamp;
+#endif
 			break;
+		}
 
 		if (icsk->icsk_ca_ops->pkt_acked) {
 			icsk->icsk_ca_ops->pkt_acked(sk, skb);

@@ -16,6 +16,7 @@ struct paced_chirping_ext {
 	u8 packets;
 
 	u64 scheduled_gap;
+	u64 first_ack_timestamp;
 };
 
 struct paced_chirping_cache {

@@ -140,12 +140,10 @@ EXPORT_SYMBOL(paced_chirping_exit);
 /******************** Chirp creating functions ********************/
 u32  paced_chirping_tso_segs(struct sock *sk, struct paced_chirping* pc, unsigned int mss_now)
 {
-	if (paced_chirping_enabled && paced_chirping_active(pc)) {
-		return 1;
-	}
 	return tcp_tso_autosize(sk, mss_now,
 				sock_net(sk)->ipv4.sysctl_tcp_min_tso_segs);
 }
+EXPORT_SYMBOL(paced_chirping_tso_segs);
 u32 paced_chirping_schedule_new_chirp(struct sock *sk,
 				      struct paced_chirping *pc,
 				      u32 N,
@@ -215,8 +213,9 @@ u32 paced_chirping_schedule_new_chirp(struct sock *sk,
 	tp->chirp.gap_ns = initial_gap_ns;
 	tp->chirp.gap_step_ns = gap_step_ns;
 	tp->chirp.guard_interval_ns = guard_interval_ns;
-	tp->chirp.scheduled_gaps = NULL;
+	//tp->chirp.scheduled_gaps = NULL;
 	tp->chirp.packets_out = 0;
+	tp->chirp.packets_per_unit = 1;
 	tp->chirp.chirp_number = pc->next_chirp_number++;
 	
 	tp->snd_cwnd = tcp_packets_in_flight(tp) + (N<<1);

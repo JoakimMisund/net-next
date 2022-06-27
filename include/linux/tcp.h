@@ -80,15 +80,14 @@ struct tcp_sack_block {
 
 #if IS_ENABLED(CONFIG_PACED_CHIRPING)
 struct chirp {
-	u16 packets;
-	u16 packets_out;
+	u8 packets;
+	u8 packets_out;
+	u8 packets_per_unit;
 	u32 gap_ns;
-	u32 gap_step_ns;
+	s32 gap_step_ns;
 	u32 guard_interval_ns;
-	u32 begin_seq;
-	u32 end_seq;
+	//u8  kernel_status; /* Idea to signal errors to the PC module (e.g. pc_ext failure) */
 	u16 chirp_number;
-	u64 *scheduled_gaps;
 };
 #endif
 
